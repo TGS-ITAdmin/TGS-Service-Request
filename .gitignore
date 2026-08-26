@@ -1,0 +1,4 @@
+node_modules/
+server/tickets.db*
+.DS_Store
+dist/

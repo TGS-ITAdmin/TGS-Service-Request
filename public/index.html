@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HelpDesk — Ticketing System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+    .fade-in { animation: fadeIn .15s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .tooltip { position: relative; }
+    .tooltip .tip { visibility:hidden; opacity:0; position:absolute; bottom:125%; left:50%; transform:translateX(-50%);
+      background:#1e293b; color:white; font-size:11px; white-space:nowrap; padding:4px 8px; border-radius:5px;
+      transition:opacity .15s; pointer-events:none; z-index:99; }
+    .tooltip:hover .tip { visibility:visible; opacity:1; }
+    .star { cursor:pointer; font-size:28px; color:#d1d5db; transition:color .1s, transform .1s; }
+    .star.on { color:#f59e0b; }
+    .star:hover { transform:scale(1.15); }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+<div id="app"></div>
+<script>
+// ─── API ─────────────────────────────────────────────────────────────────────
+const API = {
+  token: localStorage.getItem('hd_token') || null,
+  setToken(t) { this.token = t; t ? localStorage.setItem('hd_token', t) : localStorage.removeItem('hd_token') },
+  async req(method, path, body) {
+    const res = await fetch('/api' + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: 'Bearer ' + this.token } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+    let data = null
+    try { data = await res.json() } catch {}
+    if (res.status === 401 && App.screen === 'app') { App.logout(); throw new Error('Session expired') }
+    if (!res.ok) throw new Error(data?.error || data?.message || 'Request failed (' + res.status + ')')
+    return data
+  },
+  get(p) { return this.req('GET', p) },
+  post(p, b) { return this.req('POST', p, b) },
+  patch(p, b) { return this.req('PATCH', p, b) },
+  put(p, b) { return this.req('PUT', p, b) },
+  del(p) { return this.req('DELETE', p) },
+}
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+const PERMS = {
+  admin:   { manageUsers:true,  manageRoles:true,  manageDepts:true,  manageCategories:true,  manageRouting:true,  editTicket:true },
+  manager: { manageUsers:false, manageRoles:false, manageDepts:false, manageCategories:false, manageRouting:false, editTicket:true },
+  agent:   { manageUsers:false, manageRoles:false, manageDepts:false, manageCategories:false, manageRouting:false, editTicket:false },
+  requestor: {},
+}
+function can(a) { return !!((PERMS[App.me?.role] || {})[a]) }
+function isStaff() { return ['admin','manager','agent'].includes(App.me?.role) }
+function roleColor(r) { return r==='admin'?'bg-purple-100 text-purple-700':r==='manager'?'bg-blue-100 text-blue-700':r==='agent'?'bg-gray-100 text-gray-600':'bg-teal-100 text-teal-700' }
+function roleBadge(r) { return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${roleColor(r)}">${r}</span>` }
+
+const SLA_HOURS = { urgent: 4, high: 24, medium: 72, low: 120 }
+const FLAGS = {
+  breached:  { level:'breached',  label:'SLA Breached', short:'Breached', icon:'🚨', cls:'bg-red-600 text-white',        bar:'bg-red-600' },
+  critical:  { level:'critical',  label:'Critical',     short:'Critical', icon:'🔴', cls:'bg-red-100 text-red-700',       bar:'bg-red-400' },
+  'at-risk': { level:'at-risk',   label:'At Risk',      short:'At Risk',  icon:'🟠', cls:'bg-orange-100 text-orange-700', bar:'bg-orange-400' },
+  watch:     { level:'watch',     label:'Watch',        short:'Watch',    icon:'🟡', cls:'bg-yellow-100 text-yellow-700', bar:'bg-yellow-400' },
+  'on-track':{ level:'on-track',  label:'On Track',     short:'On Track', icon:'🟢', cls:'bg-green-100 text-green-700',   bar:'bg-green-400' },
+}
+const STATUS = {
+  open:        { label:'Open',        cls:'bg-blue-100 text-blue-700' },
+  in_progress: { label:'In Progress', cls:'bg-yellow-100 text-yellow-700' },
+  resolved:    { label:'Resolved',    cls:'bg-green-100 text-green-700' },
+  closed:      { label:'Closed',      cls:'bg-gray-100 text-gray-600' },
+}
+const PRIORITY = {
+  low:    { label:'↓ Low',    cls:'bg-gray-100 text-gray-600' },
+  medium: { label:'→ Medium', cls:'bg-blue-100 text-blue-700' },
+  high:   { label:'↑ High',   cls:'bg-orange-100 text-orange-700' },
+  urgent: { label:'⚡ Urgent', cls:'bg-red-100 text-red-700' },
+}
+const COLORS = ['#3b82f6','#06b6d4','#10b981','#f59e0b','#8b5cf6','#ef4444','#ec4899','#64748b']
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function computeFlag(t) {
+  if (t.status === 'resolved' || t.status === 'closed') return null
+  const created = new Date(t.created_at)
+  const slaMs = (SLA_HOURS[t.priority] || SLA_HOURS.medium) * 3600000
+  const slaDL = new Date(created.getTime() + slaMs)
+  const dueDL = t.due_date ? new Date(t.due_date + 'T23:59:59') : null
+  const deadline = dueDL && dueDL < slaDL ? dueDL : slaDL
+  const totalMs = deadline - created, remaining = deadline - new Date()
+  const pct = remaining / totalMs
+  if (remaining <= 0) return { ...FLAGS.breached, remaining, deadline }
+  if (pct <= 0.25) return { ...FLAGS.critical, remaining, deadline }
+  if (pct <= 0.50) return { ...FLAGS['at-risk'], remaining, deadline }
+  if (pct <= 0.75) return { ...FLAGS.watch, remaining, deadline }
+  return { ...FLAGS['on-track'], remaining, deadline }
+}
+function fmtRemaining(ms) {
+  if (ms <= 0) return 'overdue'
+  const h = Math.floor(ms / 3600000)
+  if (h < 1) return Math.floor(ms/60000) + 'm left'
+  if (h < 24) return h + 'h left'
+  return Math.floor(h/24) + 'd ' + (h%24) + 'h left'
+}
+function flagBadge(t, compact=false) {
+  const f = computeFlag(t)
+  if (!f) return '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-400">✅ Done</span>'
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${f.cls}">${f.icon} ${compact?f.short:f.label}</span>`
+}
+function slaBar(t) {
+  const f = computeFlag(t); if (!f) return ''
+  const created = new Date(t.created_at)
+  const pctUsed = Math.min(100, Math.max(0, ((new Date() - created) / (f.deadline - created)) * 100))
+  return `<div><div class="flex items-center justify-between text-xs mb-1">
+    <span class="text-gray-500">SLA · ${SLA_HOURS[t.priority]}h for ${t.priority}</span>
+    <span class="font-medium">${fmtRemaining(f.remaining)}</span></div>
+    <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden"><div class="h-full rounded-full ${f.bar}" style="width:${pctUsed}%"></div></div></div>`
+}
+function fmt(iso) { if(!iso) return '—'; return new Date(iso).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) }
+function fmtDate(iso) { if(!iso) return '—'; return new Date(iso+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) }
+function timeAgo(iso) { const s=Math.floor((Date.now()-new Date(iso))/1000); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago' }
+function isOverdue(d,s) { if(!d||s==='resolved'||s==='closed')return false; return new Date(d+'T23:59:59')<new Date() }
+function esc(s) { if(s==null)return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+function badge(map,k) { const v=map[k]||map.open||map.medium; return `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${v.cls}">${v.label}</span>` }
+function avatar(name,color,size='sm') { const sz=size==='lg'?'w-10 h-10 text-sm':size==='md'?'w-8 h-8 text-xs':'w-7 h-7 text-xs'; const i=(name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2); return `<div class="${sz} rounded-full flex items-center justify-center font-semibold text-white flex-shrink-0" style="background:${color||'#6366f1'}">${i}</div>` }
+function stars(n) { return '★'.repeat(n) + '☆'.repeat(5-n) }
+function spinner() { return '<div class="flex items-center justify-center h-40 text-gray-400 text-sm">Loading…</div>' }
+
+// ─── APP ─────────────────────────────────────────────────────────────────────
+const App = {
+  screen: 'login',            // login | register | verify | app
+  me: null,
+  page: 'dashboard', selectedTicket: null, modal: null,
+  data: { users: [], depts: [], routing: {}, tickets: [], detail: null, ratings: null, emails: [] },
+  filters: { status:'',priority:'',dept:'',assignee:'',flag:'',search:'' },
+  _peopleTab: 'people',
+  authMsg: null, authErr: null, pendingEmail: null, emailPreviewUrl: null,
+  ratingDraft: 0,
+
+  async init() {
+    if (API.token) {
+      try {
+        const { user } = await API.get('/auth/me')
+        this.me = user
+        this.screen = 'app'
+        this.page = isStaff() ? 'dashboard' : 'mytickets'
+        await this.loadAll()
+      } catch { API.setToken(null); this.screen = 'login' }
+    }
+    this.render()
+  },
+
+  async loadAll() {
+    const jobs = [API.get('/tickets').then(t => this.data.tickets = t), API.get('/departments').then(d => this.data.depts = d)]
+    if (isStaff()) {
+      jobs.push(API.get('/users').then(u => this.data.users = u))
+      jobs.push(API.get('/departments/routing').then(r => this.data.routing = r))
+    }
+    await Promise.all(jobs)
+  },
+
+  async openTicket(id) {
+    this.selectedTicket = id
+    this.data.detail = null
+    this.page = isStaff() ? 'tickets' : 'mytickets'
+    this.render()
+    this.data.detail = await API.get('/tickets/' + id)
+    this.render()
+    const sc = document.getElementById('msg-scroll'); if (sc) sc.scrollTop = sc.scrollHeight
+  },
+
+  async refresh() { await this.loadAll(); if (this.selectedTicket) this.data.detail = await API.get('/tickets/' + this.selectedTicket); this.render() },
+
+  logout() { API.setToken(null); this.me = null; this.screen = 'login'; this.selectedTicket = null; this.authMsg = null; this.authErr = null; this.render() },
+  go(page, id=null) { this.page = page; this.selectedTicket = id; this.data.detail = null; this.render() },
+  openModal(name, data={}) { this.modal = { name, data }; this.render() },
+  closeModal() { this.modal = null; this.render() },
+  render() { document.getElementById('app').innerHTML = this.html(); this.bind() },
+
+  html() {
+    if (this.screen !== 'app') return this.authHtml()
+    return `
+      <div class="flex h-screen overflow-hidden">
+        ${isStaff() ? this.staffSidebar() : this.requestorSidebar()}
+        <main class="flex-1 overflow-hidden flex flex-col">
+          ${this.selectedTicket ? this.ticketDetailPage()
+            : this.page==='dashboard' ? this.dashboardPage()
+            : this.page==='tickets' ? this.ticketListPage()
+            : this.page==='mytickets' ? this.myTicketsPage()
+            : this.page==='people' ? this.peoplePage()
+            : this.page==='ratings' ? this.ratingsPage()
+            : ''}
+        </main>
+      </div>
+      ${this.modal ? this.modalHtml() : ''}
+    `
+  },
+
+  // ─── AUTH SCREENS ──────────────────────────────────────────────────────────
+  authHtml() {
+    const shell = inner => `
+      <div class="min-h-screen flex items-center justify-center bg-slate-900 p-4">
+        <div class="w-full max-w-md">
+          <div class="text-center mb-8">
+            <div class="text-5xl mb-2">🎫</div>
+            <h1 class="text-2xl font-bold text-white">HelpDesk</h1>
+            <p class="text-slate-400 text-sm">Ticketing System</p>
+          </div>
+          <div class="bg-white rounded-2xl shadow-xl p-8 fade-in">${inner}</div>
+          <p class="text-center text-slate-500 text-xs mt-6">Demo staff login: admin@company.com / Admin@123</p>
+        </div>
+      </div>`
+    const err = this.authErr ? `<div class="bg-red-50 text-red-700 border border-red-200 rounded-lg px-4 py-2.5 text-sm mb-4">${esc(this.authErr)}</div>` : ''
+    const msg = this.authMsg ? `<div class="bg-green-50 text-green-700 border border-green-200 rounded-lg px-4 py-2.5 text-sm mb-4">${this.authMsg}</div>` : ''
+
+    if (this.screen === 'register') return shell(`
+      <h2 class="text-lg font-semibold mb-1">Create your account</h2>
+      <p class="text-sm text-gray-400 mb-5">File and track support tickets.</p>
+      ${err}
+      <form id="register-form" class="space-y-4">
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+          <input name="name" required class="block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none" placeholder="Jane Doe"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+          <input name="email" type="email" required class="block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none" placeholder="jane@example.com"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Password <span class="text-gray-400 font-normal">(min 8 chars)</span></label>
+          <input name="password" type="password" required minlength="8" class="block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"></div>
+        <button type="submit" id="auth-submit" class="w-full py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Create Account</button>
+      </form>
+      <p class="text-sm text-gray-500 text-center mt-5">Already have an account? <button data-screen="login" class="text-blue-600 font-medium hover:underline">Sign in</button></p>
+    `)
+
+    if (this.screen === 'verify') return shell(`
+      <h2 class="text-lg font-semibold mb-1">Verify your email</h2>
+      <p class="text-sm text-gray-400 mb-5">We sent a 6-digit code to <strong class="text-gray-600">${esc(this.pendingEmail)}</strong>.</p>
+      ${err}${msg}
+      ${this.emailPreviewUrl ? `<div class="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800 mb-4">📧 Test mode: <a href="${esc(this.emailPreviewUrl)}" target="_blank" class="font-medium underline">open the verification email</a> to see your code.</div>` : ''}
+      <form id="verify-form" class="space-y-4">
+        <input name="code" required maxlength="6" pattern="[0-9]{6}" class="block w-full rounded-lg border border-gray-300 px-3 py-3 text-center text-2xl tracking-[0.5em] font-mono focus:border-blue-500 focus:outline-none" placeholder="••••••" autocomplete="one-time-code">
+        <button type="submit" id="auth-submit" class="w-full py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Verify & Sign In</button>
+      </form>
+      <div class="flex justify-between mt-5 text-sm">
+        <button data-action="resend-code" class="text-blue-600 hover:underline">Resend code</button>
+        <button data-screen="login" class="text-gray-400 hover:underline">Back to login</button>
+      </div>
+    `)
+
+    return shell(`
+      <h2 class="text-lg font-semibold mb-1">Welcome back</h2>
+      <p class="text-sm text-gray-400 mb-5">Sign in to your account.</p>
+      ${err}${msg}
+      <form id="login-form" class="space-y-4">
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+          <input name="email" type="email" required class="block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none" placeholder="you@example.com"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+          <input name="password" type="password" required class="block w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"></div>
+        <button type="submit" id="auth-submit" class="w-full py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Sign In</button>
+      </form>
+      <p class="text-sm text-gray-500 text-center mt-5">New here? <button data-screen="register" class="text-blue-600 font-medium hover:underline">Create an account</button></p>
+    `)
+  },
+
+  // ─── SIDEBARS ──────────────────────────────────────────────────────────────
+  staffSidebar() {
+    const u = this.me, depts = this.data.depts
+    const dept = u.dept ? depts.find(d=>d.id===u.dept) : null
+    const alert = this.data.tickets.filter(t=>{const f=computeFlag(t);return f&&f.level==='breached'}).length
+    const nav = [
+      {id:'dashboard',label:'Dashboard',icon:'⊞'},
+      {id:'tickets',label:'Tickets',icon:'🎫'},
+      {id:'people',label:'People',icon:'👥'},
+      ...(u.role==='admin'?[{id:'ratings',label:'Ratings',icon:'⭐'}]:[]),
+    ]
+    return `
+      <nav class="w-60 bg-slate-900 flex flex-col flex-shrink-0">
+        <div class="px-5 py-5 border-b border-slate-800"><div class="flex items-center gap-2"><span class="text-2xl">🎫</span>
+          <div><div class="text-white font-bold text-base leading-tight">HelpDesk</div><div class="text-slate-400 text-xs">Staff Console</div></div></div></div>
+        <div class="flex-1 px-3 py-4 space-y-1">
+          ${nav.map(n=>`<button data-nav="${n.id}" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${this.page===n.id&&!this.selectedTicket?'bg-blue-600 text-white':'text-slate-400 hover:text-white hover:bg-slate-800'}">
+            <span>${n.icon}</span>${n.label}
+            ${n.id==='tickets'&&alert>0?`<span class="ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">${alert}</span>`:''}
+          </button>`).join('')}
+        </div>
+        <div class="px-3 py-4 border-t border-slate-800">
+          <button data-action="new-ticket" class="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500">＋ New Ticket</button>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800">
+          <div class="flex items-center gap-2 mb-2">${avatar(u.name,u.color,'md')}
+            <div class="min-w-0"><div class="text-white text-xs font-semibold truncate">${esc(u.name)}</div>
+            <div class="flex items-center gap-1 mt-0.5">${roleBadge(u.role)}${dept?`<span class="text-slate-500 text-xs">· ${esc(dept.name)}</span>`:''}</div></div></div>
+          <button data-action="logout" class="w-full text-slate-400 hover:text-white text-xs py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800">Sign out</button>
+        </div>
+      </nav>`
+  },
+
+  requestorSidebar() {
+    const u = this.me
+    return `
+      <nav class="w-60 bg-slate-900 flex flex-col flex-shrink-0">
+        <div class="px-5 py-5 border-b border-slate-800"><div class="flex items-center gap-2"><span class="text-2xl">🎫</span>
+          <div><div class="text-white font-bold text-base leading-tight">HelpDesk</div><div class="text-slate-400 text-xs">Support Portal</div></div></div></div>
+        <div class="flex-1 px-3 py-4 space-y-1">
+          <button data-nav="mytickets" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium ${this.page==='mytickets'&&!this.selectedTicket?'bg-blue-600 text-white':'text-slate-400 hover:text-white hover:bg-slate-800'}">🎫 My Tickets</button>
+        </div>
+        <div class="px-3 py-4 border-t border-slate-800">
+          <button data-action="new-ticket" class="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500">＋ File a Ticket</button>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800">
+          <div class="flex items-center gap-2 mb-2">${avatar(u.name,u.color,'md')}
+            <div class="min-w-0"><div class="text-white text-xs font-semibold truncate">${esc(u.name)}</div><div class="text-slate-500 text-xs truncate">${esc(u.email)}</div></div></div>
+          <button data-action="logout" class="w-full text-slate-400 hover:text-white text-xs py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800">Sign out</button>
+        </div>
+      </nav>`
+  },
+
+  // ─── REQUESTOR: MY TICKETS ─────────────────────────────────────────────────
+  myTicketsPage() {
+    const tickets = this.data.tickets
+    return `
+      <div class="p-6 overflow-y-auto h-full fade-in">
+        <div class="flex items-center justify-between mb-6">
+          <div><h1 class="text-2xl font-bold text-gray-900">My Tickets</h1>
+          <p class="text-sm text-gray-400 mt-0.5">${tickets.length} ticket${tickets.length!==1?'s':''} · track status, reply, and reopen if needed</p></div>
+          <button data-action="new-ticket" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">＋ File a Ticket</button>
+        </div>
+        ${tickets.length===0?`<div class="flex flex-col items-center justify-center py-24 text-gray-400 bg-white rounded-xl border border-gray-200"><div class="text-5xl mb-3">🎫</div><p class="font-medium text-gray-500">No tickets yet</p><p class="text-sm mt-1">File your first ticket and we'll route it to the right team.</p></div>`
+        :`<div class="space-y-3">
+          ${tickets.map(t=>`
+            <div data-ticket="${t.id}" class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 hover:border-blue-300 hover:shadow cursor-pointer transition-all">
+              <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap mb-1">
+                    <span class="text-xs font-mono text-gray-400">#${t.num}</span>
+                    ${badge(STATUS,t.status)} ${badge(PRIORITY,t.priority)}
+                    ${t.category?`<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-purple-50 text-purple-700">${esc(t.category)}</span>`:''}
+                  </div>
+                  <div class="font-semibold text-gray-900">${esc(t.title)}</div>
+                  <div class="text-xs text-gray-400 mt-1">Filed ${timeAgo(t.created_at)} · updated ${timeAgo(t.updated_at)}</div>
+                </div>
+                <div class="flex flex-col items-end gap-2 flex-shrink-0">
+                  ${t.status==='resolved'&&!t.rated?'<span class="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-medium">⭐ Rate your experience</span>':''}
+                  ${t.status==='resolved'?'<span class="text-xs text-gray-400">Can be reopened</span>':''}
+                  ${t.rated?'<span class="text-xs text-green-600">✓ Rated</span>':''}
+                </div>
+              </div>
+            </div>`).join('')}
+        </div>`}
+      </div>`
+  },
+
+  // ─── STAFF: DASHBOARD ──────────────────────────────────────────────────────
+  dashboardPage() {
+    const tickets=this.data.tickets, depts=this.data.depts
+    const fc={breached:0,critical:0,'at-risk':0,watch:0,'on-track':0}
+    tickets.forEach(t=>{const f=computeFlag(t); if(f) fc[f.level]++})
+    const breachedList=tickets.filter(t=>{const f=computeFlag(t);return f&&f.level==='breached'})
+    return `
+      <div class="p-6 overflow-y-auto h-full fade-in">
+        <h1 class="text-2xl font-bold mb-1">Dashboard</h1>
+        <p class="text-sm text-gray-400 mb-6">Welcome back, <strong>${esc(this.me.name)}</strong> · ${roleBadge(this.me.role)}</p>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          ${[{l:'Total Tickets',v:tickets.length,c:'text-gray-900',i:'🎫'},{l:'Open',v:tickets.filter(t=>t.status==='open').length,c:'text-blue-600',i:'📬'},{l:'In Progress',v:tickets.filter(t=>t.status==='in_progress').length,c:'text-yellow-600',i:'⚙️'},{l:'SLA Breached',v:fc.breached,c:'text-red-600',i:'🚨'}].map(s=>`
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5"><div class="flex items-start justify-between"><div><p class="text-sm text-gray-500">${s.l}</p><p class="text-3xl font-bold mt-1 ${s.c}">${s.v}</p></div><span class="text-2xl">${s.i}</span></div></div>`).join('')}
+        </div>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
+          <h3 class="text-sm font-semibold text-gray-700 mb-3">🚩 Flag Summary — Active Tickets</h3>
+          <div class="grid grid-cols-5 gap-3">
+            ${Object.entries(FLAGS).map(([lv,f])=>`
+              <button data-flag-filter="${lv}" class="flex flex-col items-center p-3 rounded-xl border-2 transition-all hover:scale-105 ${fc[lv]>0?(lv==='breached'?'bg-red-600 text-white border-transparent':`${f.cls} border-transparent`):'bg-gray-50 text-gray-400 border-gray-100'}">
+                <span class="text-xl mb-1">${f.icon}</span><span class="text-2xl font-bold leading-none">${fc[lv]}</span><span class="text-xs mt-1 font-medium">${f.short}</span>
+              </button>`).join('')}
+          </div>
+          <p class="text-xs text-gray-400 mt-3">Click a flag to filter · SLA: Urgent 4h · High 24h · Medium 72h · Low 120h</p>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+          <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+            <div class="px-5 py-4 border-b border-gray-100 font-semibold text-gray-700">Recent Tickets</div>
+            <div class="divide-y divide-gray-50">
+              ${tickets.slice(0,5).map(t=>`<div data-ticket="${t.id}" class="px-5 py-3 hover:bg-gray-50 cursor-pointer flex items-center gap-3">
+                <div class="flex-1 min-w-0"><div class="text-sm font-medium truncate">${esc(t.title)}</div><div class="text-xs text-gray-400 mt-0.5">${esc(t.req_name)} · #${t.num}${t.category?' · '+esc(t.category):''}</div></div>
+                <div class="flex items-center gap-1.5 flex-shrink-0">${flagBadge(t,true)}<span class="text-xs text-gray-400">${timeAgo(t.created_at)}</span></div></div>`).join('')||'<div class="px-5 py-6 text-gray-400 text-sm text-center">No tickets yet</div>'}
+            </div>
+          </div>
+          <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+            <div class="px-5 py-4 border-b border-gray-100 font-semibold text-gray-700">Departments</div>
+            <div class="divide-y divide-gray-50">
+              ${depts.map(d=>`<div class="px-5 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full" style="background:${d.color}"></span><span class="text-sm font-medium text-gray-700">${esc(d.name)}</span></div>
+                <div class="flex gap-3 text-xs text-gray-400"><span>${tickets.filter(t=>t.dept===d.id).length} tickets</span><span>${this.data.users.filter(u=>u.dept===d.id).length} members</span></div></div>`).join('')}
+            </div>
+          </div>
+        </div>
+        ${breachedList.length?`
+          <div class="bg-red-50 rounded-xl border border-red-200 shadow-sm">
+            <div class="px-5 py-4 border-b border-red-100 font-semibold text-red-700">🚨 SLA Breached — Immediate Action Required (${breachedList.length})</div>
+            <div class="divide-y divide-red-100">
+              ${breachedList.map(t=>`<div data-ticket="${t.id}" class="px-5 py-3 hover:bg-red-100 cursor-pointer flex items-center gap-3">
+                <div class="flex-1 min-w-0"><div class="text-sm font-medium truncate">${esc(t.title)}</div><div class="text-xs text-gray-500">#${t.num} · ${esc(t.req_name)}</div></div>
+                <div class="flex gap-2 text-xs flex-shrink-0">${badge(PRIORITY,t.priority)}<span class="bg-red-600 text-white px-2 py-0.5 rounded-full font-medium">🚨 Breached</span></div></div>`).join('')}
+            </div>
+          </div>`:''}
+      </div>`
+  },
+
+  // ─── STAFF: TICKET LIST ────────────────────────────────────────────────────
+  ticketListPage() {
+    const depts=this.data.depts, users=this.data.users
+    let tickets=this.data.tickets
+    const f=this.filters
+    if(f.status) tickets=tickets.filter(t=>t.status===f.status)
+    if(f.priority) tickets=tickets.filter(t=>t.priority===f.priority)
+    if(f.dept) tickets=tickets.filter(t=>t.dept===f.dept)
+    if(f.assignee) tickets=tickets.filter(t=>t.assignee===f.assignee)
+    if(f.flag) tickets=tickets.filter(t=>{const fl=computeFlag(t);return fl&&fl.level===f.flag})
+    if(f.search){const q=f.search.toLowerCase();tickets=tickets.filter(t=>t.title.toLowerCase().includes(q)||(t.req_name||'').toLowerCase().includes(q)||(t.category||'').toLowerCase().includes(q)||String(t.num).includes(q))}
+    const dm=Object.fromEntries(depts.map(d=>[d.id,d])), um=Object.fromEntries(users.map(u=>[u.id,u]))
+    return `
+      <div class="flex flex-col h-full fade-in">
+        <div class="px-6 py-4 border-b border-gray-200 bg-white flex items-center justify-between flex-shrink-0">
+          <div><h1 class="text-xl font-bold">Tickets</h1><p class="text-sm text-gray-500 mt-0.5">${tickets.length} result${tickets.length!==1?'s':''}</p></div>
+          <button data-action="new-ticket" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">＋ New Ticket</button>
+        </div>
+        <div class="px-6 py-3 bg-white border-b border-gray-100 flex flex-wrap gap-2 flex-shrink-0">
+          <input data-filter="search" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-44 focus:outline-none focus:border-blue-500" placeholder="Search…" value="${esc(f.search)}">
+          <select data-filter="status" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"><option value="">All status</option>${Object.entries(STATUS).map(([v,{label}])=>`<option value="${v}" ${f.status===v?'selected':''}>${label}</option>`).join('')}</select>
+          <select data-filter="priority" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"><option value="">All priority</option>${Object.entries(PRIORITY).map(([v,{label}])=>`<option value="${v}" ${f.priority===v?'selected':''}>${label}</option>`).join('')}</select>
+          <select data-filter="flag" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"><option value="">All flags</option>${Object.entries(FLAGS).map(([k,v])=>`<option value="${k}" ${f.flag===k?'selected':''}>${v.icon} ${v.label}</option>`).join('')}</select>
+          <select data-filter="dept" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"><option value="">All departments</option>${depts.map(d=>`<option value="${d.id}" ${f.dept===d.id?'selected':''}>${esc(d.name)}</option>`).join('')}</select>
+          <select data-filter="assignee" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm"><option value="">All agents</option>${users.filter(u=>u.role!=='requestor').map(u=>`<option value="${u.id}" ${f.assignee===u.id?'selected':''}>${esc(u.name)}</option>`).join('')}</select>
+          ${Object.values(f).some(v=>v)?`<button data-action="clear-filters" class="px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-600 hover:bg-gray-50">✕ Clear</button>`:''}
+        </div>
+        <div class="flex-1 overflow-auto">
+          ${tickets.length===0?`<div class="flex flex-col items-center justify-center h-40 text-gray-400"><div class="text-4xl mb-2">🎫</div><div>No tickets found</div></div>`:`
+            <table class="w-full text-sm"><thead class="bg-gray-50 border-b border-gray-200 sticky top-0 z-10"><tr>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-12">#</th>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Subject</th>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">Flag</th>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-24">Status</th>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-24">Priority</th>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">Category</th>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-32">Assignee</th>
+              <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">Due</th></tr></thead>
+            <tbody class="divide-y divide-gray-100 bg-white">
+              ${tickets.map(t=>{
+                const d=t.dept?dm[t.dept]:null, a=t.assignee?um[t.assignee]:null, fl=computeFlag(t)
+                const rc=fl&&fl.level==='breached'?'bg-red-50 hover:bg-red-100':fl&&fl.level==='critical'?'bg-red-50/50':''
+                return `<tr data-ticket="${t.id}" class="hover:bg-blue-50 cursor-pointer ${rc}">
+                  <td class="px-3 py-3 text-gray-400 font-mono text-xs">${t.num}</td>
+                  <td class="px-3 py-3"><div class="font-medium truncate max-w-xs">${esc(t.title)}</div>
+                    <div class="text-xs text-gray-400 mt-0.5">${esc(t.req_name)}${d?` · <span class="inline-flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background:${d.color}"></span>${esc(d.name)}</span>`:''}</div></td>
+                  <td class="px-3 py-3">${flagBadge(t)}</td>
+                  <td class="px-3 py-3">${badge(STATUS,t.status)}</td>
+                  <td class="px-3 py-3">${badge(PRIORITY,t.priority)}</td>
+                  <td class="px-3 py-3 text-xs">${t.category?`<span class="inline-flex px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">${esc(t.category)}</span>`:'<span class="text-gray-300">—</span>'}</td>
+                  <td class="px-3 py-3">${a?`<div class="flex items-center gap-1.5">${avatar(a.name,a.color)}<span class="text-gray-600 text-xs truncate">${esc(a.name)}</span></div>`:'<span class="text-gray-300 text-xs">—</span>'}</td>
+                  <td class="px-3 py-3 text-xs ${isOverdue(t.due_date,t.status)?'text-red-600 font-medium':'text-gray-500'}">${t.due_date?fmtDate(t.due_date):'<span class="text-gray-300">—</span>'}</td></tr>`
+              }).join('')}
+            </tbody></table>`}
+        </div>
+      </div>`
+  },
+
+  // ─── TICKET DETAIL (staff + requestor) ─────────────────────────────────────
+  ticketDetailPage() {
+    const d = this.data.detail
+    if (!d) return spinner()
+    const t = d.ticket, staff = isStaff()
+    const users=this.data.users, depts=this.data.depts
+    const dept=t.dept?depts.find(x=>x.id===t.dept):null
+    const assignee=t.assignee&&staff?users.find(u=>u.id===t.assignee):null
+    const fl=computeFlag(t)
+    const canEdit=can('editTicket')
+    const isOwner=t.requestor_id===this.me.id
+    const canRate=isOwner&&['resolved','closed'].includes(t.status)&&!d.rating
+    const myRating=d.rating&&d.rating.stars?d.rating:null
+
+    const timeline=[
+      ...d.messages.map(m=>({...m,_type:'message'})),
+      ...d.audit.filter(a=>a.action!=='created').map(a=>({...a,_type:'audit'})),
+    ].sort((a,b)=>new Date(a.created_at||a.ts)-new Date(b.created_at||b.ts))
+
+    const timelineHtml=timeline.map(item=>{
+      if(item._type==='audit'){
+        const isAuto=item.action==='auto-assigned'
+        return `<div class="flex items-start gap-2 py-0.5"><div class="w-7 flex-shrink-0 flex justify-center mt-1"><div class="w-px h-4 bg-gray-200"></div></div>
+          <div class="flex-1 flex items-center gap-1.5 flex-wrap text-xs text-gray-400">
+          ${isAuto?`<span class="bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 rounded-full">🤖 Auto-routed · <strong>${esc(item.to)}</strong> · ${fmt(item.ts)}</span>`
+          :item.action==='rated'?`<span class="bg-amber-50 border border-amber-200 text-amber-700 px-2 py-0.5 rounded-full">⭐ <strong>${esc(item.actor)}</strong> rated this ticket ${esc(item.to)} · ${fmt(item.ts)}</span>`
+          :`<strong class="text-gray-600">${esc(item.actor)}</strong> changed <strong class="text-gray-600">${esc(item.field)}</strong>
+            <span class="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">${esc(item.from)}</span><span class="text-gray-300">→</span>
+            <span class="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">${esc(item.to)}</span> · ${fmt(item.ts)}`}</div></div>`
+      }
+      const mine=item.sender_id===this.me.id
+      const isAgentMsg=item.sender_type==='agent'
+      return `<div class="flex gap-3 ${mine?'flex-row-reverse':''} fade-in">
+        <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white flex-shrink-0" style="background:${isAgentMsg?'#2563eb':'#6366f1'}">${(item.sender_name||'?')[0].toUpperCase()}</div>
+        <div class="flex-1 flex flex-col max-w-[75%] ${mine?'items-end':''}">
+          <div class="flex items-baseline gap-2 mb-1 ${mine?'flex-row-reverse':''}">
+            <span class="font-semibold text-sm">${esc(item.sender_name)}</span>
+            <span class="text-xs text-gray-400">${fmt(item.created_at)}</span>
+            <span class="text-xs ${isAgentMsg?'bg-blue-100 text-blue-600':'bg-purple-100 text-purple-600'} px-1.5 py-0.5 rounded">${isAgentMsg?'Staff':'Requestor'}</span>
+            ${item.internal?'<span class="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">🔒 Internal</span>':''}
+          </div>
+          <div class="rounded-xl px-4 py-3 text-sm whitespace-pre-wrap ${item.internal?'bg-yellow-50 border border-yellow-200 text-yellow-900':mine?'bg-blue-600 text-white':'bg-white border border-gray-200 text-gray-700'}">${esc(item.body)}</div>
+        </div></div>`
+    }).join('')
+
+    // Rating survey card (requestor, resolved, not yet rated)
+    const surveyHtml = canRate ? `
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-5 fade-in">
+        <h3 class="font-semibold text-amber-900 mb-1">⭐ How did we do?</h3>
+        <p class="text-sm text-amber-700 mb-3">Your ticket was resolved. Rate ${staff?'the agent':'your support experience'} — this helps us improve.</p>
+        <div class="flex gap-1 mb-3" id="star-row">
+          ${[1,2,3,4,5].map(n=>`<span class="star ${this.ratingDraft>=n?'on':''}" data-star="${n}">★</span>`).join('')}
+        </div>
+        <textarea id="rating-comment" rows="2" class="block w-full rounded-lg border border-amber-200 px-3 py-2 text-sm focus:outline-none focus:border-amber-400 resize-none mb-3" placeholder="Optional comment…"></textarea>
+        <button data-action="submit-rating" data-ticket="${t.id}" class="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 ${this.ratingDraft?'':'opacity-50 cursor-not-allowed'}">Submit Rating</button>
+      </div>` : ''
+
+    const ratedHtml = myRating ? `
+      <div class="bg-green-50 border border-green-200 rounded-xl p-4">
+        <div class="text-sm font-medium text-green-800">✓ You rated this ticket <span class="text-amber-500">${stars(myRating.stars)}</span></div>
+        ${myRating.comment?`<div class="text-sm text-green-700 mt-1">"${esc(myRating.comment)}"</div>`:''}
+      </div>` : (d.rating?.exists && !staff ? '' : '')
+
+    const adminRating = staff && this.me.role==='admin' && d.rating?.stars ? `
+      <div><h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Requestor Rating</h3>
+        <div class="bg-amber-50 border border-amber-100 rounded-lg p-3">
+          <div class="text-amber-500 text-lg">${stars(d.rating.stars)}</div>
+          ${d.rating.comment?`<div class="text-sm text-gray-600 mt-1">"${esc(d.rating.comment)}"</div>`:''}
+        </div></div>` : ''
+
+    return `
+      <div class="flex flex-col h-full bg-gray-50 fade-in">
+        <div class="px-6 py-4 bg-white border-b border-gray-200 flex-shrink-0 ${fl&&fl.level==='breached'?'border-l-4 border-l-red-500':''}">
+          <div class="flex items-start gap-4">
+            <button data-action="back" class="text-gray-400 hover:text-gray-600 mt-1 text-xl leading-none">←</button>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-xs font-mono text-gray-400">#${t.num}</span>
+                ${staff?flagBadge(t):''} ${badge(STATUS,t.status)} ${badge(PRIORITY,t.priority)}
+                ${t.category?`<span class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">${esc(t.category)}</span>`:''}
+              </div>
+              <h1 class="text-xl font-bold mt-1">${esc(t.title)}</h1>
+              <p class="text-sm text-gray-500 mt-0.5">From <strong>${esc(t.req_name)}</strong> · ${fmt(t.created_at)}</p>
+            </div>
+            ${isOwner&&t.status==='resolved'?`<button data-action="reopen" data-ticket="${t.id}" class="px-4 py-2 rounded-lg border border-orange-300 bg-orange-50 text-orange-700 text-sm font-medium hover:bg-orange-100 flex-shrink-0">↻ Reopen Ticket</button>`:''}
+          </div>
+        </div>
+        <div class="flex flex-1 overflow-hidden">
+          <div class="flex-1 flex flex-col overflow-hidden">
+            <div id="msg-scroll" class="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+              <div class="flex gap-3">
+                <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-xs font-semibold text-purple-700 flex-shrink-0">${(t.req_name||'?')[0].toUpperCase()}</div>
+                <div class="flex-1"><div class="flex items-baseline gap-2 mb-1">
+                  <span class="font-semibold text-sm">${esc(t.req_name)}</span><span class="text-xs text-gray-400">${fmt(t.created_at)}</span>
+                  <span class="text-xs bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded">Requestor</span></div>
+                  <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-700 whitespace-pre-wrap max-w-[75%]">${esc(t.description)||'<em class="text-gray-400">No description.</em>'}</div></div>
+              </div>
+              ${timelineHtml}
+              ${surveyHtml}${ratedHtml}
+            </div>
+            <div class="px-6 py-4 bg-white border-t border-gray-200 flex-shrink-0">
+              ${t.status==='closed'?'<div class="text-sm text-gray-400 text-center py-2">This ticket is closed. ' + (isOwner?'File a new ticket if you need more help.':'') + '</div>':`
+              <div class="flex items-center gap-4 mb-2">
+                <span class="text-sm font-medium text-gray-700">Reply as ${esc(this.me.name)}</span>
+                ${staff?`<label class="flex items-center gap-1.5 text-sm text-gray-500 cursor-pointer select-none"><input type="checkbox" id="internal-cb" class="rounded"> Internal note</label>`:''}
+              </div>
+              <textarea id="reply-text" rows="3" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:border-blue-500 resize-none" placeholder="Write a reply…"></textarea>
+              <div class="flex items-center justify-between mt-2">
+                <span class="text-xs text-gray-400">📧 The other party is notified by email</span>
+                <button data-action="send-reply" data-ticket="${t.id}" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">📨 Send Reply</button>
+              </div>`}
+            </div>
+          </div>
+          <div class="w-72 border-l border-gray-200 bg-white overflow-y-auto flex-shrink-0">
+            <div class="p-5 space-y-5">
+              ${staff?`<div><h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Resolution SLA</h3>
+                ${fl?`<div class="rounded-xl p-3 bg-gray-50 border border-gray-100">${slaBar(t)}<div class="text-xs text-gray-400 mt-2">Deadline: ${fmt(fl.deadline.toISOString())}</div></div>`:'<div class="text-sm text-gray-400">✅ Resolved</div>'}</div>`:''}
+              <div>
+                <div class="flex items-center justify-between mb-3">
+                  <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Details</h3>
+                  ${staff?(canEdit?`<button data-action="edit-ticket" data-ticket="${t.id}" class="text-xs text-blue-600 hover:underline font-medium">Edit</button>`:'<span class="text-xs text-gray-300">🔒</span>'):''}
+                </div>
+                <div class="space-y-3">
+                  <div><div class="text-xs text-gray-400 mb-0.5">Status</div>${badge(STATUS,t.status)}</div>
+                  <div><div class="text-xs text-gray-400 mb-0.5">Priority</div>${badge(PRIORITY,t.priority)}</div>
+                  <div><div class="text-xs text-gray-400 mb-0.5">Department</div>${dept?`<span class="flex items-center gap-1.5 text-sm text-gray-700"><span class="w-2 h-2 rounded-full" style="background:${dept.color}"></span>${esc(dept.name)}</span>`:'<span class="text-sm text-gray-400">—</span>'}</div>
+                  <div><div class="text-xs text-gray-400 mb-0.5">Category</div>${t.category?`<span class="inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">${esc(t.category)}</span>`:'<span class="text-sm text-gray-400">—</span>'}</div>
+                  ${staff?`<div><div class="text-xs text-gray-400 mb-0.5">Assignee <span class="text-blue-400">(auto-routed)</span></div>
+                    ${assignee?`<div class="flex items-center gap-2">${avatar(assignee.name,assignee.color,'md')}<div><div class="text-sm font-medium">${esc(assignee.name)}</div><div class="text-xs text-gray-400">${esc(assignee.email)}</div></div></div>`:'<span class="text-sm text-gray-400">Unassigned</span>'}</div>`
+                  :`<div><div class="text-xs text-gray-400 mb-0.5">Handled by</div><span class="text-sm text-gray-700">${t.assignee?'Support staff':'Awaiting assignment'}</span></div>`}
+                  <div><div class="text-xs text-gray-400 mb-0.5">Due Date</div><span class="text-sm ${isOverdue(t.due_date,t.status)?'text-red-600 font-medium':'text-gray-700'}">${t.due_date?fmtDate(t.due_date):'Not set'}</span></div>
+                </div>
+              </div>
+              ${adminRating}
+              <div><h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Timeline</h3>
+                <div class="space-y-2 text-xs text-gray-500">
+                  <div class="flex justify-between"><span>Created</span><span>${fmt(t.created_at)}</span></div>
+                  <div class="flex justify-between"><span>Updated</span><span>${fmt(t.updated_at)}</span></div>
+                  ${t.resolved_at?`<div class="flex justify-between"><span>Resolved</span><span>${fmt(t.resolved_at)}</span></div>`:''}
+                  <div class="flex justify-between"><span>Messages</span><span>${d.messages.length}</span></div>
+                </div></div>
+              ${staff&&canEdit?`
+                <div><h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Quick Actions</h3>
+                  <div class="space-y-2">
+                    ${t.status!=='in_progress'?`<button data-action="set-status" data-ticket="${t.id}" data-status="in_progress" class="w-full text-left px-3 py-2 text-xs rounded-lg border border-gray-200 hover:bg-gray-50">▶ Mark In Progress</button>`:''}
+                    ${t.status!=='resolved'?`<button data-action="set-status" data-ticket="${t.id}" data-status="resolved" class="w-full text-left px-3 py-2 text-xs rounded-lg border border-gray-200 text-green-600 hover:bg-green-50">✓ Resolve Ticket</button>`:''}
+                    ${t.status!=='closed'?`<button data-action="set-status" data-ticket="${t.id}" data-status="closed" class="w-full text-left px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">✕ Close Ticket</button>`:''}
+                  </div></div>`:''}
+            </div>
+          </div>
+        </div>
+      </div>`
+  },
+
+  // ─── STAFF: PEOPLE ─────────────────────────────────────────────────────────
+  peoplePage() {
+    const tab=this._peopleTab, users=this.data.users, depts=this.data.depts
+    return `
+      <div class="p-6 h-full overflow-y-auto fade-in">
+        <h1 class="text-2xl font-bold mb-6">People & Departments</h1>
+        <div class="flex gap-1 mb-6 bg-gray-100 rounded-lg p-1 w-fit">
+          ${[['people','👤 People'],['departments','🏢 Departments'],['routing','🤖 Routing']].map(([t,l])=>`<button data-tab="${t}" class="px-4 py-1.5 rounded-md text-sm font-medium ${tab===t?'bg-white shadow text-gray-900':'text-gray-500 hover:text-gray-700'}">${l}</button>`).join('')}
+        </div>
+        ${tab==='people'?this.tabPeople(users,depts):tab==='departments'?this.tabDepts(users,depts):this.tabRouting(users,depts)}
+      </div>`
+  },
+
+  tabPeople(users, depts) {
+    const staffUsers=users.filter(u=>u.role!=='requestor'), requestors=users.filter(u=>u.role==='requestor')
+    const row=u=>{
+      const dept=u.dept?depts.find(d=>d.id===u.dept):null
+      return `<tr class="hover:bg-gray-50">
+        <td class="px-4 py-3"><div class="flex items-center gap-3">${avatar(u.name,u.color,'md')}<div><div class="font-medium">${esc(u.name)}</div><div class="text-xs text-gray-400">${esc(u.email)}${u.verified?'':' · <span class="text-amber-500">unverified</span>'}</div></div></div></td>
+        <td class="px-4 py-3">${roleBadge(u.role)}</td>
+        <td class="px-4 py-3 text-sm">${dept?`<span class="flex items-center gap-1.5 text-gray-600"><span class="w-2 h-2 rounded-full" style="background:${dept.color}"></span>${esc(dept.name)}</span>`:'<span class="text-gray-300">—</span>'}</td>
+        ${can('manageRoles')?`<td class="px-4 py-3"><select data-action="change-role" data-id="${u.id}" class="border border-gray-200 rounded-lg px-2 py-1 text-xs ${u.id==='u-admin'?'opacity-40':''}" ${u.id==='u-admin'?'disabled':''}>
+          ${['requestor','agent','manager','admin'].map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${r[0].toUpperCase()+r.slice(1)}</option>`).join('')}</select></td>`:''}
+        ${can('manageUsers')?`<td class="px-4 py-3"><select data-action="change-user-dept" data-id="${u.id}" class="border border-gray-200 rounded-lg px-2 py-1 text-xs ${u.id==='u-admin'?'opacity-40':''}" ${u.id==='u-admin'?'disabled':''}><option value="">None</option>${depts.map(d=>`<option value="${d.id}" ${u.dept===d.id?'selected':''}>${esc(d.name)}</option>`).join('')}</select></td>`:''}
+        ${can('manageUsers')?`<td class="px-4 py-3"><button data-action="del-user" data-id="${u.id}" class="text-gray-300 hover:text-red-500 ${u.id==='u-admin'?'opacity-30 cursor-not-allowed':''}" ${u.id==='u-admin'?'disabled':''}>✕</button></td>`:''}
+      </tr>`
+    }
+    const table=rows=>`<div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6"><table class="w-full text-sm">
+      <thead class="bg-gray-50 border-b border-gray-100"><tr>
+        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Person</th>
+        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Role</th>
+        <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Department</th>
+        ${can('manageRoles')?'<th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-32">Change Role</th>':''}
+        ${can('manageUsers')?'<th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-40">Change Dept</th>':''}
+        ${can('manageUsers')?'<th class="px-4 py-3 w-12"></th>':''}</tr></thead>
+      <tbody class="divide-y divide-gray-50">${rows}</tbody></table></div>`
+    return `
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-semibold text-gray-700">Staff (${staffUsers.length})</h2>
+        ${can('manageUsers')?`<button data-action="add-user" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">＋ Add Person</button>`:''}
+      </div>
+      ${table(staffUsers.map(row).join(''))}
+      <h2 class="text-lg font-semibold text-gray-700 mb-4">Requestors (${requestors.length})</h2>
+      ${requestors.length?table(requestors.map(row).join('')):'<div class="text-sm text-gray-400 bg-white rounded-xl border border-gray-200 p-6 text-center">No self-registered users yet</div>'}
+    `
+  },
+
+  tabDepts(users, depts) {
+    return `
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-semibold text-gray-700">Departments (${depts.length})</h2>
+        ${can('manageDepts')?`<button data-action="add-dept" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">＋ Add Department</button>`:''}
+      </div>
+      ${!can('manageCategories')?'<div class="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-2.5 rounded-lg mb-4"><span>🔒</span><span>Only <strong>Admins</strong> can edit categories.</span></div>':''}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${depts.map(d=>`
+          <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:${d.color}22"><span class="w-4 h-4 rounded-full block" style="background:${d.color}"></span></div>
+                <div><div class="font-semibold">${esc(d.name)}</div><div class="text-xs text-gray-400 mt-0.5">${users.filter(u=>u.dept===d.id).length} members · ${this.data.tickets.filter(t=>t.dept===d.id).length} tickets</div></div>
+              </div>
+              ${can('manageDepts')?`<button data-action="del-dept" data-id="${d.id}" class="text-gray-300 hover:text-red-500 text-lg leading-none">✕</button>`:''}
+            </div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Issue Categories</span>
+              ${can('manageCategories')?`<button data-action="add-category" data-dept="${d.id}" class="text-xs text-blue-600 hover:underline font-medium">＋ Add</button>`:''}
+            </div>
+            <div class="flex flex-wrap gap-1.5 min-h-6">
+              ${d.categories.map(c=>`<span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">${esc(c)}
+                ${can('manageCategories')?`<button data-action="del-category" data-dept="${d.id}" data-cat="${esc(c)}" class="text-gray-300 hover:text-red-500 ml-0.5 font-bold leading-none">×</button>`:''}</span>`).join('')||'<span class="text-xs text-gray-300 italic">No categories</span>'}
+            </div>
+          </div>`).join('')}
+      </div>`
+  },
+
+  tabRouting(users, depts) {
+    const routing=this.data.routing, isAdmin=can('manageRouting')
+    const agents=users.filter(u=>!['requestor'].includes(u.role)&&u.role!=='admin')
+    return `
+      <div>
+        <h2 class="text-lg font-semibold text-gray-700">Auto-assignment Routing</h2>
+        <p class="text-sm text-gray-400 mt-0.5 mb-4">Tickets are auto-assigned by department + category. Changes apply to the next ticket.</p>
+        ${!isAdmin?'<div class="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-2.5 rounded-lg mb-4"><span>🔒</span><span>Only <strong>Admins</strong> can edit routing.</span></div>':''}
+        <div class="space-y-4">
+          ${depts.map(d=>{
+            const rules=routing[d.id]||{}
+            const opts=(sel)=>agents.map(u=>`<option value="${u.id}" ${sel===u.id?'selected':''}>${esc(u.name)} (${u.role})</option>`).join('')
+            return `<div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div class="px-5 py-3.5 border-b border-gray-100 flex items-center gap-2 bg-gray-50">
+                <span class="w-3 h-3 rounded-full" style="background:${d.color}"></span><span class="font-semibold">${esc(d.name)}</span>
+                <span class="text-xs text-gray-400 ml-1">(${d.categories.length} categories)</span></div>
+              <table class="w-full text-sm"><tbody class="divide-y divide-gray-50">
+                <tr class="bg-blue-50/40"><td class="px-5 py-2.5 text-blue-700 font-medium text-xs">⚙ Default / Fallback</td>
+                  <td class="px-5 py-2.5 text-right w-64">${isAdmin?`<select data-action="set-route" data-dept="${d.id}" data-cat="_default" class="border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs w-full"><option value="">Unassigned</option>${opts(rules._default)}</select>`
+                  :`<span class="text-sm text-gray-600">${rules._default?esc(users.find(u=>u.id===rules._default)?.name||'?'):'Unassigned'}</span>`}</td></tr>
+                ${d.categories.map(cat=>{
+                  const assigned=rules[cat], au=assigned?users.find(u=>u.id===assigned):null
+                  return `<tr class="hover:bg-gray-50"><td class="px-5 py-2.5 text-gray-600">${esc(cat)}</td>
+                    <td class="px-5 py-2.5 text-right w-64">${isAdmin?`<select data-action="set-route" data-dept="${d.id}" data-cat="${esc(cat)}" class="border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs w-full"><option value="">↑ Use default</option>${opts(assigned)}</select>`
+                    :au?`<div class="flex items-center justify-end gap-2">${avatar(au.name,au.color)}<span class="text-xs">${esc(au.name)}</span></div>`:'<span class="text-gray-300 text-xs italic">Uses default</span>'}</td></tr>`
+                }).join('')}
+              </tbody></table></div>`
+          }).join('')}
+        </div>
+      </div>`
+  },
+
+  // ─── ADMIN: RATINGS ────────────────────────────────────────────────────────
+  ratingsPage() {
+    const r = this.data.ratings
+    if (!r) { API.get('/users/ratings').then(x=>{this.data.ratings=x;this.render()}); return spinner() }
+    return `
+      <div class="p-6 h-full overflow-y-auto fade-in">
+        <h1 class="text-2xl font-bold mb-1">⭐ Satisfaction Ratings</h1>
+        <p class="text-sm text-gray-400 mb-6">Post-resolution surveys from requestors. Visible to admins only.</p>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+          ${r.summary.length?r.summary.map(s=>`
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+              <div class="text-sm font-medium text-gray-700">${esc(s.agent_name||'Unassigned')}</div>
+              <div class="text-2xl text-amber-500 mt-1">${stars(Math.round(s.avg_stars))}</div>
+              <div class="text-xs text-gray-400 mt-1">${s.avg_stars} avg · ${s.count} rating${s.count!==1?'s':''}</div>
+            </div>`).join(''):'<div class="col-span-3 text-sm text-gray-400 bg-white rounded-xl border border-gray-200 p-8 text-center">No ratings yet — they appear after requestors rate resolved tickets.</div>'}
+        </div>
+        ${r.ratings.length?`
+          <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div class="px-5 py-4 border-b border-gray-100 font-semibold text-gray-700">All Ratings</div>
+            <div class="divide-y divide-gray-50">
+              ${r.ratings.map(x=>`
+                <div class="px-5 py-3 flex items-start gap-4">
+                  <div class="text-amber-500 text-lg flex-shrink-0">${stars(x.stars)}</div>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm"><span class="font-medium">${esc(x.requestor_name||'Unknown')}</span> rated <span class="font-medium">${esc(x.agent_name||'Unassigned')}</span> on <span class="text-gray-500">#${x.ticket_num} ${esc(x.title)}</span></div>
+                    ${x.comment?`<div class="text-sm text-gray-500 mt-0.5">"${esc(x.comment)}"</div>`:''}
+                  </div>
+                  <span class="text-xs text-gray-400 flex-shrink-0">${timeAgo(x.created_at)}</span>
+                </div>`).join('')}
+            </div>
+          </div>`:''}
+      </div>`
+  },
+
+  // ─── MODALS ────────────────────────────────────────────────────────────────
+  modalHtml() {
+    const {name,data}=this.modal
+    const depts=this.data.depts, users=this.data.users
+    const modal=(title,size,content)=>{
+      const w={sm:'max-w-md',md:'max-w-lg',lg:'max-w-2xl'}
+      return `<div class="fixed inset-0 z-50 flex items-center justify-center p-4"><div class="absolute inset-0 bg-black/40 backdrop-blur-sm" data-action="close-modal"></div>
+        <div class="relative w-full ${w[size]||w.md} bg-white rounded-xl shadow-xl fade-in max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10"><h2 class="text-lg font-semibold">${title}</h2>
+        <button data-action="close-modal" class="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button></div><div class="p-6">${content}</div></div></div>`
+    }
+    const catOpts=(deptId,sel)=>{
+      if(!deptId) return '<option value="">Select a department first</option>'
+      const d=depts.find(x=>x.id===deptId)
+      return '<option value="">— Select category —</option>'+(d?.categories||[]).map(c=>`<option value="${esc(c)}" ${sel===c?'selected':''}>${esc(c)}</option>`).join('')
+    }
+
+    if(name==='new-ticket') {
+      const defaultDue=(()=>{const d=new Date();d.setDate(d.getDate()+5);return d.toISOString().split('T')[0]})()
+      return modal(isStaff()?'Create New Ticket':'File a Ticket','lg',`
+        <form id="new-ticket-form" class="space-y-4">
+          <div id="form-error" class="hidden bg-red-50 text-red-700 border border-red-200 rounded-lg px-4 py-2 text-sm"></div>
+          ${isStaff()?`<div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Requestor Name</label><input name="reqName" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="On behalf of…"></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Requestor Email</label><input name="reqEmail" type="email" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+          </div>`:`<div class="bg-gray-50 rounded-lg px-4 py-2.5 text-sm text-gray-500">Filing as <strong class="text-gray-700">${esc(this.me.name)}</strong> (${esc(this.me.email)})</div>`}
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Subject *</label>
+            <input name="title" required class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="Brief description of the issue"></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+            <textarea name="description" rows="3" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm resize-none" placeholder="Provide details…"></textarea></div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+              <select name="priority" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><option value="low">↓ Low</option><option value="medium" selected>→ Medium</option><option value="high">↑ High</option><option value="urgent">⚡ Urgent</option></select></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
+              <input name="due_date" type="date" value="${defaultDue}" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Department</label>
+              <select name="dept" id="new-dept-sel" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><option value="">— Select department —</option>${depts.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Issue Category</label>
+              <select name="category" id="new-cat-sel" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><option value="">Select dept first</option></select></div>
+          </div>
+          <div class="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">🤖 Your ticket will be automatically routed to the right team member.</div>
+          <div class="flex justify-end gap-3 pt-2">
+            <button type="button" data-action="close-modal" class="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Cancel</button>
+            <button type="submit" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">🎫 Submit Ticket</button>
+          </div>
+        </form>`)
+    }
+
+    if(name==='edit-ticket') {
+      const t=this.data.detail?.ticket
+      if(!t) return ''
+      return modal(`Edit Ticket #${t.num}`,'md',`
+        <form id="edit-ticket-form" data-id="${t.id}" class="space-y-4">
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select name="status" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">${Object.entries(STATUS).map(([v,{label}])=>`<option value="${v}" ${t.status===v?'selected':''}>${label}</option>`).join('')}</select></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+              <select name="priority" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">${Object.entries(PRIORITY).map(([v,{label}])=>`<option value="${v}" ${t.priority===v?'selected':''}>${label}</option>`).join('')}</select></div>
+          </div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+            <input name="title" value="${esc(t.title)}" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Department</label>
+              <select name="dept" id="edit-dept-sel" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><option value="">Unassigned</option>${depts.map(d=>`<option value="${d.id}" ${t.dept===d.id?'selected':''}>${esc(d.name)}</option>`).join('')}</select></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Category</label>
+              <select name="category" id="edit-cat-sel" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">${catOpts(t.dept,t.category)}</select></div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Assignee</label>
+              <select name="assignee" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><option value="">Unassigned</option>${users.filter(u=>['agent','manager'].includes(u.role)).map(u=>`<option value="${u.id}" ${t.assignee===u.id?'selected':''}>${esc(u.name)} (${u.role})</option>`).join('')}</select></div>
+            <div><label class="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
+              <input name="due_date" type="date" value="${t.due_date||''}" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+          </div>
+          <div class="flex justify-end gap-3 pt-1">
+            <button type="button" data-action="close-modal" class="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Cancel</button>
+            <button type="submit" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Save Changes</button>
+          </div>
+        </form>`)
+    }
+
+    if(name==='add-user') return modal('Add Team Member','sm',`
+      <form id="add-user-form" class="space-y-4">
+        <div id="form-error" class="hidden bg-red-50 text-red-700 border border-red-200 rounded px-3 py-2 text-sm"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Full Name *</label><input name="name" required class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Email *</label><input name="email" type="email" required class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Temporary Password *</label><input name="password" required minlength="8" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="They log in with this"></div>
+        <div class="grid grid-cols-2 gap-4">
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Role</label><select name="role" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><option value="agent">Agent</option><option value="manager">Manager</option><option value="admin">Admin</option></select></div>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Department</label><select name="dept" class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><option value="">None</option>${depts.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div>
+        </div>
+        <div class="flex justify-end gap-3 pt-1"><button type="button" data-action="close-modal" class="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Add Member</button></div>
+      </form>`)
+
+    if(name==='add-dept') return modal('Add Department','sm',`
+      <form id="add-dept-form" class="space-y-4">
+        <div id="form-error" class="hidden bg-red-50 text-red-700 border border-red-200 rounded px-3 py-2 text-sm"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-1">Department Name *</label><input name="name" required class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+        <div><label class="block text-sm font-medium text-gray-700 mb-2">Color</label>
+          <div class="flex gap-2 flex-wrap">${COLORS.map((c,i)=>`<button type="button" data-color="${c}" class="w-8 h-8 rounded-full color-btn hover:scale-110 transition-transform ${i===0?'ring-2 ring-offset-2 ring-gray-400':''}" style="background:${c}"></button>`).join('')}</div>
+          <input type="hidden" name="color" value="${COLORS[0]}"></div>
+        <div class="flex justify-end gap-3 pt-1"><button type="button" data-action="close-modal" class="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Add Department</button></div>
+      </form>`)
+
+    if(name==='add-category') {
+      const dept=depts.find(d=>d.id===data.deptId)
+      return modal(`Add Category — ${esc(dept?.name||'')}`,'sm',`
+        <form id="add-category-form" data-dept="${data.deptId}" class="space-y-4">
+          <div id="form-error" class="hidden bg-red-50 text-red-700 border border-red-200 rounded px-3 py-2 text-sm"></div>
+          <p class="text-sm text-gray-500">Existing: <span class="text-gray-700">${(dept?.categories||[]).join(', ')||'None'}</span></p>
+          <div><label class="block text-sm font-medium text-gray-700 mb-1">Category Name *</label>
+            <input name="cat" required class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. VPN Access"></div>
+          <p class="text-xs text-gray-400">💡 After adding, set a routing rule in the Routing tab.</p>
+          <div class="flex justify-end gap-3 pt-1"><button type="button" data-action="close-modal" class="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50">Cancel</button><button type="submit" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Add Category</button></div>
+        </form>`)
+    }
+    return ''
+  },
+
+  // ─── EVENTS ────────────────────────────────────────────────────────────────
+  bind() {
+    const el=s=>document.getElementById(s), all=s=>document.querySelectorAll(s)
+    const showErr=(m)=>{const e=el('form-error');if(e){e.textContent=m;e.classList.remove('hidden')}else alert(m)}
+
+    // Auth screens
+    all('[data-screen]').forEach(b=>b.addEventListener('click',()=>{this.screen=b.dataset.screen;this.authErr=null;this.authMsg=null;this.render()}))
+    el('login-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      try {
+        const {token,user}=await API.post('/auth/login',{email:fd.get('email'),password:fd.get('password')})
+        API.setToken(token);this.me=user;this.screen='app';this.page=isStaff()?'dashboard':'mytickets'
+        this.authErr=null;await this.loadAll();this.render()
+      } catch(err) {
+        if(err.message==='unverified'){this.pendingEmail=fd.get('email');this.screen='verify';this.authErr='Please verify your email first.';this.render()}
+        else {this.authErr=err.message;this.render()}
+      }
+    })
+    el('register-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      const btn=el('auth-submit');btn.disabled=true;btn.textContent='Sending code…'
+      try {
+        const r=await API.post('/auth/register',{name:fd.get('name'),email:fd.get('email'),password:fd.get('password')})
+        this.pendingEmail=fd.get('email');this.emailPreviewUrl=r.emailPreviewUrl;this.screen='verify';this.authErr=null;this.authMsg=null;this.render()
+      } catch(err){this.authErr=err.message;this.render()}
+    })
+    el('verify-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      try {
+        const {token,user}=await API.post('/auth/verify',{email:this.pendingEmail,code:fd.get('code')})
+        API.setToken(token);this.me=user;this.screen='app';this.page='mytickets'
+        this.authErr=null;await this.loadAll();this.render()
+      } catch(err){this.authErr=err.message;this.render()}
+    })
+
+    if(this.screen!=='app'){
+      const resend=document.querySelector('[data-action="resend-code"]')
+      resend?.addEventListener('click',async()=>{
+        try{const r=await API.post('/auth/resend',{email:this.pendingEmail});this.emailPreviewUrl=r.emailPreviewUrl;this.authMsg='New code sent!';this.authErr=null;this.render()}
+        catch(err){this.authErr=err.message;this.render()}
+      })
+      return
+    }
+
+    // Main app
+    all('[data-nav]').forEach(b=>b.addEventListener('click',()=>{this.selectedTicket=null;this.data.detail=null;if(b.dataset.nav==='ratings')this.data.ratings=null;this.go(b.dataset.nav)}))
+    all('[data-ticket]').forEach(b=>{if(b.tagName==='TR'||b.classList.contains('cursor-pointer')){b.addEventListener('click',e=>{if(e.target.closest('button,select,a'))return;this.openTicket(b.dataset.ticket)})}})
+    all('[data-flag-filter]').forEach(b=>b.addEventListener('click',()=>{this.filters.flag=b.dataset.flagFilter;this.go('tickets')}))
+    all('[data-filter]').forEach(f=>f.addEventListener('input',()=>{this.filters[f.dataset.filter]=f.value;this.render()}))
+    all('[data-tab]').forEach(b=>b.addEventListener('click',()=>{this._peopleTab=b.dataset.tab;this.render()}))
+
+    // Inline selects
+    all('select[data-action="change-role"]').forEach(s=>s.addEventListener('change',async e=>{
+      try{await API.patch('/users/'+s.dataset.id,{role:e.target.value});await this.refresh()}catch(err){alert(err.message);this.render()}
+    }))
+    all('select[data-action="change-user-dept"]').forEach(s=>s.addEventListener('change',async e=>{
+      try{await API.patch('/users/'+s.dataset.id,{dept:e.target.value||null});await this.refresh()}catch(err){alert(err.message);this.render()}
+    }))
+    all('select[data-action="set-route"]').forEach(s=>s.addEventListener('change',async e=>{
+      try{await API.put('/departments/routing',{deptId:s.dataset.dept,category:s.dataset.cat,userId:e.target.value||null});this.data.routing=await API.get('/departments/routing')}catch(err){alert(err.message)}
+    }))
+
+    // Stars
+    all('.star').forEach(s=>s.addEventListener('click',()=>{this.ratingDraft=Number(s.dataset.star);const c=el('rating-comment')?.value;this.render();const nc=el('rating-comment');if(nc&&c)nc.value=c}))
+
+    // Buttons
+    all('button[data-action],div[data-action="close-modal"]').forEach(b=>b.addEventListener('click',async e=>{
+      const a=b.dataset.action
+      if(['change-role','change-user-dept','set-route'].includes(a))return
+      e.preventDefault()
+      try {
+        if(a==='logout') return this.logout()
+        if(a==='new-ticket') return this.openModal('new-ticket')
+        if(a==='close-modal') return this.closeModal()
+        if(a==='back'){this.selectedTicket=null;this.data.detail=null;await this.loadAll();return this.render()}
+        if(a==='clear-filters'){this.filters={status:'',priority:'',dept:'',assignee:'',flag:'',search:''};return this.render()}
+        if(a==='edit-ticket') return this.openModal('edit-ticket')
+        if(a==='add-user') return this.openModal('add-user')
+        if(a==='add-dept') return this.openModal('add-dept')
+        if(a==='add-category') return this.openModal('add-category',{deptId:b.dataset.dept})
+        if(a==='del-category'){ if(confirm(`Remove category "${b.dataset.cat}"?`)){await API.del(`/departments/${b.dataset.dept}/categories/${encodeURIComponent(b.dataset.cat)}`);await this.refresh()} return }
+        if(a==='del-user'){ if(confirm('Remove this user?')){await API.del('/users/'+b.dataset.id);await this.refresh()} return }
+        if(a==='del-dept'){ if(confirm('Delete this department? Its tickets become unassigned.')){await API.del('/departments/'+b.dataset.id);await this.refresh()} return }
+        if(a==='set-status'){await API.patch('/tickets/'+b.dataset.ticket,{status:b.dataset.status});return this.openTicket(b.dataset.ticket)}
+        if(a==='reopen'){ if(confirm('Reopen this ticket? The assigned staff member will be notified.')){await API.patch('/tickets/'+b.dataset.ticket,{status:'open'});return this.openTicket(b.dataset.ticket)} return }
+        if(a==='send-reply'){
+          const text=el('reply-text')?.value.trim();if(!text)return
+          await API.post(`/tickets/${b.dataset.ticket}/messages`,{body:text,internal:el('internal-cb')?.checked||false})
+          return this.openTicket(b.dataset.ticket)
+        }
+        if(a==='submit-rating'){
+          if(!this.ratingDraft)return
+          await API.post(`/tickets/${b.dataset.ticket}/rating`,{stars:this.ratingDraft,comment:el('rating-comment')?.value||''})
+          this.ratingDraft=0
+          return this.openTicket(b.dataset.ticket)
+        }
+      } catch(err){alert(err.message)}
+    }))
+
+    // Cascades
+    const nd=el('new-dept-sel'),nc=el('new-cat-sel')
+    if(nd)nd.addEventListener('change',()=>{
+      const d=this.data.depts.find(x=>x.id===nd.value)
+      if(nc)nc.innerHTML='<option value="">— Select category —</option>'+(d?.categories||[]).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')
+    })
+    const ed=el('edit-dept-sel'),ec=el('edit-cat-sel')
+    if(ed)ed.addEventListener('change',()=>{
+      const d=this.data.depts.find(x=>x.id===ed.value)
+      if(ec)ec.innerHTML='<option value="">— Select category —</option>'+(d?.categories||[]).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')
+    })
+
+    // Color picker
+    all('.color-btn').forEach(b=>b.addEventListener('click',()=>{
+      all('.color-btn').forEach(x=>x.classList.remove('ring-2','ring-offset-2','ring-gray-400'))
+      b.classList.add('ring-2','ring-offset-2','ring-gray-400')
+      b.closest('form')?.querySelector('[name=color]')?.setAttribute('value',b.dataset.color)
+    }))
+
+    // Forms
+    el('new-ticket-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      try{
+        const t=await API.post('/tickets',{title:fd.get('title'),description:fd.get('description'),priority:fd.get('priority'),dept:fd.get('dept')||null,category:fd.get('category')||null,due_date:fd.get('due_date')||null,reqName:fd.get('reqName'),reqEmail:fd.get('reqEmail')})
+        this.closeModal();await this.loadAll();this.openTicket(t.id)
+      }catch(err){showErr(err.message)}
+    })
+    el('edit-ticket-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      try{
+        await API.patch('/tickets/'+e.target.dataset.id,{title:fd.get('title'),status:fd.get('status'),priority:fd.get('priority'),dept:fd.get('dept')||null,category:fd.get('category')||null,assignee:fd.get('assignee')||null,due_date:fd.get('due_date')||null})
+        this.closeModal();await this.loadAll();this.openTicket(e.target.dataset.id)
+      }catch(err){showErr(err.message)}
+    })
+    el('add-user-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      try{await API.post('/users',{name:fd.get('name'),email:fd.get('email'),password:fd.get('password'),role:fd.get('role'),dept:fd.get('dept')||null});this.closeModal();await this.refresh()}catch(err){showErr(err.message)}
+    })
+    el('add-dept-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      try{await API.post('/departments',{name:fd.get('name'),color:fd.get('color')});this.closeModal();this._peopleTab='departments';await this.refresh()}catch(err){showErr(err.message)}
+    })
+    el('add-category-form')?.addEventListener('submit',async e=>{
+      e.preventDefault();const fd=new FormData(e.target)
+      try{await API.post(`/departments/${e.target.dataset.dept}/categories`,{name:fd.get('cat')});this.closeModal();this._peopleTab='departments';await this.refresh()}catch(err){showErr(err.message)}
+    })
+
+    if(this.modal){const k=e=>{if(e.key==='Escape'){this.closeModal();document.removeEventListener('keydown',k)}};document.addEventListener('keydown',k)}
+  },
+}
+
+App.init()
+</script>
+</body>
+</html>
