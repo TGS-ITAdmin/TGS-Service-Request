@@ -29,7 +29,8 @@ r.post('/register', async (req, res) => {
       [randomUUID(), name.trim(), email.toLowerCase(), hash, color, code]
     )
   }
-  const { previewUrl } = await sendMail({ to: email, subject: 'Verify your HelpDesk account', html: verificationEmail(name, code) })
+  const { ok, previewUrl } = await sendMail({ to: email, subject: 'Verify your HelpDesk account', html: verificationEmail(name, code) })
+  if (!ok) return res.status(502).json({ error: 'Could not send the verification email. Please try again or contact an administrator.' })
   res.json({ ok: true, message: 'Verification code sent', emailPreviewUrl: previewUrl })
 })
 
@@ -51,7 +52,8 @@ r.post('/resend', async (req, res) => {
   if (!user || user.verified) return res.status(400).json({ error: 'Cannot resend for this account' })
   const code = String(Math.floor(100000 + Math.random() * 900000))
   await pool.query('UPDATE users SET verify_code = $1 WHERE id = $2', [code, user.id])
-  const { previewUrl } = await sendMail({ to: user.email, subject: 'Your new HelpDesk verification code', html: verificationEmail(user.name, code) })
+  const { ok, previewUrl } = await sendMail({ to: user.email, subject: 'Your new HelpDesk verification code', html: verificationEmail(user.name, code) })
+  if (!ok) return res.status(502).json({ error: 'Could not send the verification email. Please try again later.' })
   res.json({ ok: true, emailPreviewUrl: previewUrl })
 })
 
