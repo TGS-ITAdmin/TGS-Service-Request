@@ -1,13 +1,17 @@
 import { Router } from 'express'
+import express from 'express'
 import { randomUUID } from 'crypto'
 import pool, { nextTicketNum } from '../db.js'
-import { requireAuth } from '../auth.js'
+import { requireAuth, requireStaff } from '../auth.js'
 import { sendMail, notificationEmail } from '../email.js'
 
 const r = Router()
 r.use(requireAuth)
 
 const now = () => new Date().toISOString()
+// Every new ticket gets these subtasks (mirrors the "acknowledge the requestor" step in the Asana workflow)
+const DEFAULT_SUBTASKS = ['Send acknowledgement response to requestor']
+const MAX_FILE_BYTES = 10 * 1024 * 1024
 const isStaff = u => ['admin', 'manager', 'agent'].includes(u.role)
 const canEditTicket = u => ['admin', 'manager'].includes(u.role)
 
@@ -30,14 +34,25 @@ function ticketVisible(user, t) {
   return isStaff(user) || t.requestor_id === user.id
 }
 
-// GET /api/tickets — staff see all; requestors see their own
+// GET /api/tickets — staff see all; requestors see their own. Includes counts for list badges.
 r.get('/', async (req, res) => {
-  const { rows } = isStaff(req.user)
-    ? await pool.query('SELECT * FROM tickets ORDER BY created_at DESC')
-    : await pool.query('SELECT * FROM tickets WHERE requestor_id = $1 ORDER BY created_at DESC', [req.user.id])
+  const staff = isStaff(req.user)
+  const { rows } = await pool.query(
+    `SELECT t.*,
+       (SELECT COUNT(*)::int FROM subtasks s WHERE s.ticket_id = t.id) subtask_total,
+       (SELECT COUNT(*)::int FROM subtasks s WHERE s.ticket_id = t.id AND s.done) subtask_done,
+       (SELECT COUNT(*)::int FROM messages m WHERE m.ticket_id = t.id AND ($1::boolean OR NOT m.internal)) comment_count,
+       (SELECT COUNT(*)::int FROM attachments a WHERE a.ticket_id = t.id) attachment_count
+     FROM tickets t
+     ${staff ? '' : 'WHERE t.requestor_id = $2'}
+     ORDER BY t.created_at DESC`,
+    staff ? [staff] : [staff, req.user.id]
+  )
   const { rows: ratingRows } = await pool.query('SELECT ticket_id FROM ratings')
   const rated = new Set(ratingRows.map(x => x.ticket_id))
-  res.json(rows.map(t => ({ ...t, rated: rated.has(t.id) })))
+  res.json(rows.map(t => staff
+    ? { ...t, rated: rated.has(t.id) }
+    : { ...t, subtask_total: 0, subtask_done: 0, rated: rated.has(t.id) }))
 })
 
 // GET /api/tickets/:id — full detail with messages + audit + rating
@@ -51,9 +66,15 @@ r.get('/:id', async (req, res) => {
   const { rows: messages } = await pool.query(msgQ, [t.id])
   const { rows: audit } = await pool.query('SELECT * FROM audit WHERE ticket_id = $1 ORDER BY ts', [t.id])
   const { rows: [rating] } = await pool.query('SELECT * FROM ratings WHERE ticket_id = $1', [t.id])
+  // internal workflow steps are staff-only
+  const { rows: subtasks } = isStaff(req.user)
+    ? await pool.query('SELECT * FROM subtasks WHERE ticket_id = $1 ORDER BY created_at', [t.id])
+    : { rows: [] }
+  const { rows: attachments } = await pool.query(
+    'SELECT id,ticket_id,filename,mime,size,uploaded_by,uploaded_by_name,created_at FROM attachments WHERE ticket_id = $1 ORDER BY created_at', [t.id])
   // ratings visible to admin + the requestor who left it
   const showRating = req.user.role === 'admin' || (rating && rating.requestor_id === req.user.id)
-  res.json({ ticket: t, messages, audit, rating: showRating ? (rating || null) : (rating ? { exists: true } : null) })
+  res.json({ ticket: t, messages, audit, subtasks, attachments, rating: showRating ? (rating || null) : (rating ? { exists: true } : null) })
 })
 
 // POST /api/tickets — any authenticated user creates; requestor fields auto-filled
@@ -79,6 +100,9 @@ r.post('/', async (req, res) => {
      t.requestor_id, t.req_name, t.req_email, t.due_date, t.created_at, t.updated_at, t.resolved_at]
   )
   await addAudit(t.id, { actor: req.user.name, action: 'created', field: null, from: null, to: `Ticket #${t.num} created` })
+  for (const title of DEFAULT_SUBTASKS) {
+    await pool.query('INSERT INTO subtasks (id,ticket_id,title,done,assignee,created_at) VALUES ($1,$2,$3,false,$4,$5)', [randomUUID(), t.id, title, assignee, now()])
+  }
   if (assignee) {
     const { rows: [a] } = await pool.query('SELECT name,email FROM users WHERE id = $1', [assignee])
     await addAudit(t.id, { actor: 'System', action: 'auto-assigned', field: 'Assignee', from: 'Unassigned', to: `${a?.name || '?'} (auto-routed)` })
@@ -124,6 +148,7 @@ r.patch('/:id', async (req, res) => {
     }
   }
   if (updates.status === 'resolved' && t.status !== 'resolved') updates.resolved_at = now()
+  if (updates.status && !['resolved', 'closed'].includes(updates.status)) updates.resolved_at = null
   if (Object.keys(updates).length) {
     updates.updated_at = now()
     const keys = Object.keys(updates)
@@ -185,6 +210,101 @@ r.post('/:id/rating', async (req, res) => {
   )
   await addAudit(t.id, { actor: req.user.name, action: 'rated', field: 'Rating', from: null, to: `${stars}★` })
   res.status(201).json({ ok: true })
+})
+
+// ---------- Subtasks (staff only) ----------
+
+// POST /api/tickets/:id/subtasks — { title, assignee? }
+r.post('/:id/subtasks', requireStaff, async (req, res) => {
+  const { rows: [t] } = await pool.query('SELECT id FROM tickets WHERE id = $1', [req.params.id])
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  const title = (req.body?.title || '').trim()
+  if (!title) return res.status(400).json({ error: 'Subtask title required' })
+  const sub = { id: randomUUID(), ticket_id: t.id, title: title.slice(0, 300), done: false, assignee: req.body?.assignee || null, created_at: now(), done_at: null }
+  await pool.query('INSERT INTO subtasks (id,ticket_id,title,done,assignee,created_at) VALUES ($1,$2,$3,false,$4,$5)', [sub.id, sub.ticket_id, sub.title, sub.assignee, sub.created_at])
+  await pool.query('UPDATE tickets SET updated_at = $1 WHERE id = $2', [now(), t.id])
+  await addAudit(t.id, { actor: req.user.name, action: 'subtask-added', field: 'Subtask', from: null, to: sub.title })
+  res.status(201).json(sub)
+})
+
+// PATCH /api/tickets/:id/subtasks/:sid — { title?, done?, assignee? }
+r.patch('/:id/subtasks/:sid', requireStaff, async (req, res) => {
+  const { rows: [sub] } = await pool.query('SELECT * FROM subtasks WHERE id = $1 AND ticket_id = $2', [req.params.sid, req.params.id])
+  if (!sub) return res.status(404).json({ error: 'Not found' })
+  const b = req.body || {}
+  const title = b.title !== undefined ? String(b.title).trim().slice(0, 300) : sub.title
+  if (!title) return res.status(400).json({ error: 'Subtask title required' })
+  const done = b.done !== undefined ? !!b.done : sub.done
+  const assignee = b.assignee !== undefined ? (b.assignee || null) : sub.assignee
+  await pool.query('UPDATE subtasks SET title=$1, done=$2, assignee=$3, done_at=$4 WHERE id=$5',
+    [title, done, assignee, done ? (sub.done ? sub.done_at : now()) : null, sub.id])
+  if (done !== sub.done) {
+    await pool.query('UPDATE tickets SET updated_at = $1 WHERE id = $2', [now(), sub.ticket_id])
+    await addAudit(sub.ticket_id, { actor: req.user.name, action: done ? 'subtask-done' : 'subtask-reopened', field: 'Subtask', from: null, to: title })
+  }
+  const { rows: [updated] } = await pool.query('SELECT * FROM subtasks WHERE id = $1', [sub.id])
+  res.json(updated)
+})
+
+// DELETE /api/tickets/:id/subtasks/:sid — admin/manager
+r.delete('/:id/subtasks/:sid', requireStaff, async (req, res) => {
+  if (!canEditTicket(req.user)) return res.status(403).json({ error: 'Only admins and managers can delete subtasks' })
+  const { rows: [sub] } = await pool.query('DELETE FROM subtasks WHERE id = $1 AND ticket_id = $2 RETURNING title', [req.params.sid, req.params.id])
+  if (!sub) return res.status(404).json({ error: 'Not found' })
+  await addAudit(req.params.id, { actor: req.user.name, action: 'subtask-removed', field: 'Subtask', from: sub.title, to: null })
+  res.json({ ok: true })
+})
+
+// ---------- Attachments (stored in Postgres, 10 MB each) ----------
+
+// POST /api/tickets/:id/attachments — raw file body; name in X-Filename (URI-encoded), type in X-Mime
+r.post('/:id/attachments', express.raw({ type: () => true, limit: MAX_FILE_BYTES }), async (req, res) => {
+  const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  if (!ticketVisible(req.user, t)) return res.status(403).json({ error: 'Forbidden' })
+  const body = req.body
+  if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'No file received' })
+  let filename = 'file'
+  try { filename = decodeURIComponent(req.headers['x-filename'] || 'file') } catch { /* keep default */ }
+  filename = filename.replace(/[\\/\r\n"]/g, '_').slice(0, 200) || 'file'
+  const mime = String(req.headers['x-mime'] || 'application/octet-stream').slice(0, 100)
+  const a = { id: randomUUID(), ticket_id: t.id, filename, mime, size: body.length, uploaded_by: req.user.id, uploaded_by_name: req.user.name, created_at: now() }
+  await pool.query(
+    'INSERT INTO attachments (id,ticket_id,filename,mime,size,data,uploaded_by,uploaded_by_name,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [a.id, a.ticket_id, a.filename, a.mime, a.size, body, a.uploaded_by, a.uploaded_by_name, a.created_at]
+  )
+  await pool.query('UPDATE tickets SET updated_at = $1 WHERE id = $2', [now(), t.id])
+  await addAudit(t.id, { actor: req.user.name, action: 'attached', field: 'Attachment', from: null, to: filename })
+  res.status(201).json(a)
+})
+
+// GET /api/tickets/:id/attachments/:aid — download (always as attachment, never rendered by the browser)
+r.get('/:id/attachments/:aid', async (req, res) => {
+  const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  if (!ticketVisible(req.user, t)) return res.status(403).json({ error: 'Forbidden' })
+  const { rows: [a] } = await pool.query('SELECT * FROM attachments WHERE id = $1 AND ticket_id = $2', [req.params.aid, t.id])
+  if (!a) return res.status(404).json({ error: 'Not found' })
+  res.set({
+    'Content-Type': a.mime,
+    'Content-Length': a.size,
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(a.filename)}`,
+    'X-Content-Type-Options': 'nosniff',
+  })
+  res.send(a.data)
+})
+
+// DELETE /api/tickets/:id/attachments/:aid — admin/manager, or whoever uploaded it
+r.delete('/:id/attachments/:aid', async (req, res) => {
+  const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
+  if (!t) return res.status(404).json({ error: 'Not found' })
+  if (!ticketVisible(req.user, t)) return res.status(403).json({ error: 'Forbidden' })
+  const { rows: [a] } = await pool.query('SELECT id,filename,uploaded_by FROM attachments WHERE id = $1 AND ticket_id = $2', [req.params.aid, t.id])
+  if (!a) return res.status(404).json({ error: 'Not found' })
+  if (!canEditTicket(req.user) && a.uploaded_by !== req.user.id) return res.status(403).json({ error: 'You can only remove your own attachments' })
+  await pool.query('DELETE FROM attachments WHERE id = $1', [a.id])
+  await addAudit(t.id, { actor: req.user.name, action: 'attachment-removed', field: 'Attachment', from: a.filename, to: null })
+  res.json({ ok: true })
 })
 
 export default r

@@ -36,8 +36,11 @@ app.get('*', (req, res) => res.sendFile(join(distDir, 'index.html')))
 
 // Any error thrown in an async route lands here instead of crashing the server
 app.use((err, req, res, next) => {
-  console.error('Unhandled route error:', err)
   if (res.headersSent) return next(err)
+  const status = err.status || err.statusCode || 500
+  if (status === 413) return res.status(413).json({ error: 'File is too large (10 MB maximum)' })
+  if (status < 500) return res.status(status).json({ error: err.message || 'Bad request' })
+  console.error('Unhandled route error:', err)
   res.status(500).json({ error: 'Internal server error' })
 })
 

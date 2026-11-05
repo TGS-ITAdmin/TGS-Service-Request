@@ -1,0 +1,68 @@
+// Display metadata for tickets. Edit the wording here to match your own service levels.
+
+export const PRIORITIES = ['urgent', 'high', 'medium', 'low']
+
+export const PRIORITY_META = {
+  urgent: { label: 'Critical', pill: 'bg-red-300 text-red-950',       desc: 'Critical - Request needs to be completed within 24 hours' },
+  high:   { label: 'High',     pill: 'bg-orange-300 text-orange-950', desc: 'High - Request needs prompt attention' },
+  medium: { label: 'Medium',   pill: 'bg-yellow-300 text-yellow-950', desc: 'Medium - Standard request' },
+  low:    { label: 'Low',      pill: 'bg-sky-200 text-sky-900',       desc: 'Low - No rush' },
+}
+
+export const STATUSES = ['open', 'in_progress', 'resolved', 'closed']
+export const STATUS_META = {
+  open:        { label: 'Open',        dot: 'bg-blue-500' },
+  in_progress: { label: 'In progress', dot: 'bg-yellow-500' },
+  resolved:    { label: 'Resolved',    dot: 'bg-green-500' },
+  closed:      { label: 'Closed',      dot: 'bg-gray-400' },
+}
+export const isDone = (status) => status === 'resolved' || status === 'closed'
+
+// ---- dates ----
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+
+function parseDay(str) {            // 'YYYY-MM-DD' -> local midnight
+  if (!str) return null
+  const [y, m, d] = String(str).slice(0, 10).split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+// Asana-style due date: Today / Tomorrow / Yesterday / weekday name / "Nov 13".
+// tone: overdue (red) | soon (green) | normal | muted (completed)
+export function formatDue(due, done = false, today = new Date()) {
+  const d = parseDay(due)
+  if (!d) return { text: '', tone: 'normal' }
+  const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const diff = Math.round((d - t0) / 86400000)
+  let text
+  if (diff === 0) text = 'Today'
+  else if (diff === 1) text = 'Tomorrow'
+  else if (diff === -1) text = 'Yesterday'
+  else if (diff > 1 && diff < 7) text = WEEKDAYS[d.getDay()]
+  else text = `${MONTHS[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== t0.getFullYear() ? ', ' + d.getFullYear() : ''}`
+  let tone = 'normal'
+  if (done) tone = 'muted'
+  else if (diff < 0) tone = 'overdue'
+  else if (diff <= 1) tone = 'soon'
+  return { text, tone }
+}
+export const DUE_TONE = { overdue: 'text-red-600', soon: 'text-green-600', normal: 'text-gray-700', muted: 'text-gray-400' }
+
+export function timeAgo(d) {
+  const s = Math.floor((Date.now() - new Date(d)) / 1000)
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)}d ago`
+  return new Date(d).toLocaleDateString()
+}
+export const fmtDateTime = (d) => d ? new Date(d).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'
+
+export function fmtSize(n) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+export const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']

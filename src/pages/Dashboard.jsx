@@ -66,7 +66,7 @@ export default function Dashboard({ onSelect }) {
         <StatCard label="Total Tickets" value={stats.total} color="text-gray-900" icon="🎫" />
         <StatCard label="Open" value={stats.open} color="text-blue-600" icon="📬" />
         <StatCard label="In Progress" value={stats.in_progress} color="text-yellow-600" icon="⚙️" />
-        <StatCard label="Urgent" value={stats.urgent} color="text-red-600" icon="⚡" />
+        <StatCard label="Critical" value={stats.urgent} color="text-red-600" icon="⚡" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

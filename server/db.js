@@ -95,6 +95,28 @@ CREATE TABLE IF NOT EXISTS ratings (
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE TABLE IF NOT EXISTS counters (k TEXT PRIMARY KEY, v INTEGER);
+CREATE TABLE IF NOT EXISTS subtasks (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  done BOOLEAN NOT NULL DEFAULT false,
+  assignee TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  done_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS subtasks_ticket_idx ON subtasks(ticket_id);
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+  size INTEGER NOT NULL,
+  data BYTEA NOT NULL,
+  uploaded_by TEXT,
+  uploaded_by_name TEXT,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attachments_ticket_idx ON attachments(ticket_id);
 `
 
 export async function initDb() {

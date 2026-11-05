@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import Dashboard from './pages/Dashboard.jsx'
-import TicketList from './pages/TicketList.jsx'
-import TicketDetail from './pages/TicketDetail.jsx'
+import TicketsWorkspace from './pages/TicketsWorkspace.jsx'
 import NewTicket from './pages/NewTicket.jsx'
 import PeopleSettings from './pages/PeopleSettings.jsx'
 import Login from './pages/Login.jsx'
@@ -94,18 +93,12 @@ function Shell() {
       {/* Main */}
       <main className="flex-1 overflow-hidden">
         {page === 'dashboard' && <Dashboard onSelect={(id) => { setSelectedTicket(id); setPage('tickets') }} />}
-        {page === 'tickets' && !selectedTicket && (
-          <TicketList
+        {page === 'tickets' && (
+          <TicketsWorkspace
+            selectedId={selectedTicket}
             onSelect={setSelectedTicket}
             onNew={() => setShowNew(true)}
             refreshKey={refreshKey}
-          />
-        )}
-        {page === 'tickets' && selectedTicket && (
-          <TicketDetail
-            ticketId={selectedTicket}
-            onBack={() => setSelectedTicket(null)}
-            onUpdated={refresh}
           />
         )}
         {page === 'people' && isStaff(user) && <PeopleSettings />}

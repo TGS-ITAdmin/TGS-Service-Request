@@ -15,6 +15,7 @@ export default function NewTicket({ onClose, onCreated }) {
   const [departments, setDepartments] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [files, setFiles] = useState([])
 
   useEffect(() => { api.departments.list().then(setDepartments) }, [])
 
@@ -36,6 +37,10 @@ export default function NewTicket({ onClose, onCreated }) {
         category: form.category || null,
         due_date: form.due_date || null,
       })
+      for (const f of files) {
+        try { await api.tickets.uploadAttachment(ticket.id, f) }
+        catch (e) { alert(`Ticket created, but "${f.name}" could not be attached: ${e.message}`) }
+      }
       onCreated(ticket)
     } catch (e) {
       setError(e.message)
@@ -84,7 +89,7 @@ export default function NewTicket({ onClose, onCreated }) {
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
-              <option value="urgent">Urgent</option>
+              <option value="urgent">Critical</option>
             </select>
           </div>
           <div>
@@ -110,6 +115,19 @@ export default function NewTicket({ onClose, onCreated }) {
           </div>
         </div>
         <p className="text-xs text-gray-400 -mt-2">Tickets are routed to the right agent automatically based on department and category.</p>
+
+        <div>
+          <label className="label">Attachments</label>
+          <input type="file" multiple data-testid="new-ticket-files"
+            className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-gray-200"
+            onChange={e => {
+              const picked = Array.from(e.target.files || [])
+              const tooBig = picked.filter(f => f.size > 10 * 1024 * 1024)
+              if (tooBig.length) alert(`${tooBig.map(f => f.name).join(', ')} exceed${tooBig.length === 1 ? 's' : ''} the 10 MB limit and will be skipped.`)
+              setFiles(picked.filter(f => f.size <= 10 * 1024 * 1024))
+            }} />
+          {files.length > 0 && <p className="text-xs text-gray-400 mt-1">{files.length} file{files.length > 1 ? 's' : ''} will be attached.</p>}
+        </div>
 
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>

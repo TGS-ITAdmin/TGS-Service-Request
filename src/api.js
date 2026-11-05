@@ -27,6 +27,22 @@ async function req(method, path, body) {
   return res.json()
 }
 
+async function rawFetch(method, path, { body, headers } = {}) {
+  const token = authToken.get()
+  const res = await fetch(BASE + path, {
+    method,
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
+    body,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    const e = new Error(err.error || res.statusText)
+    e.status = res.status
+    throw e
+  }
+  return res
+}
+
 export const api = {
   auth: {
     register: (data) => req('POST', '/auth/register', data),
@@ -43,6 +59,18 @@ export const api = {
     update: (id, data) => req('PATCH', `/tickets/${id}`, data),
     addMessage: (id, data) => req('POST', `/tickets/${id}/messages`, data),
     rate: (id, data) => req('POST', `/tickets/${id}/rating`, data),
+    addSubtask: (id, data) => req('POST', `/tickets/${id}/subtasks`, data),
+    updateSubtask: (id, sid, data) => req('PATCH', `/tickets/${id}/subtasks/${sid}`, data),
+    deleteSubtask: (id, sid) => req('DELETE', `/tickets/${id}/subtasks/${sid}`),
+    uploadAttachment: async (id, file) => {
+      const res = await rawFetch('POST', `/tickets/${id}/attachments`, {
+        body: file,
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name), 'X-Mime': file.type || 'application/octet-stream' },
+      })
+      return res.json()
+    },
+    downloadAttachment: async (id, aid) => (await rawFetch('GET', `/tickets/${id}/attachments/${aid}`)).blob(),
+    deleteAttachment: (id, aid) => req('DELETE', `/tickets/${id}/attachments/${aid}`),
   },
   users: {
     list: () => req('GET', '/users'),
