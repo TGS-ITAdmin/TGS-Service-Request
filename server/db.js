@@ -99,6 +99,9 @@ CREATE TABLE IF NOT EXISTS counters (k TEXT PRIMARY KEY, v INTEGER);
 
 export async function initDb() {
   await pool.query(SCHEMA)
+  // Migrations for databases created before user management existed
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false')
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ')
 
   const { rows: [{ c }] } = await pool.query('SELECT COUNT(*)::int c FROM users')
   if (c > 0) return
@@ -140,6 +143,9 @@ export async function initDb() {
   await pool.query(insRoute, ['dept-fin','_default','u4'])
   await pool.query(insRoute, ['dept-ops','_default','u5'])
   await pool.query(insRoute, ['dept-fac','_default',null])
+
+  // Seeded demo accounts use well-known passwords, so make people replace them on first login
+  await pool.query('UPDATE users SET must_change_password = true')
 
   await pool.query('INSERT INTO counters (k,v) VALUES ($1,$2)', ['ticket', 1000])
   console.log('✅ Seed complete (default passwords: Admin@123 / Staff@123 — change these before real use)')

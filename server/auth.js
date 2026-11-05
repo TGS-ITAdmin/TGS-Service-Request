@@ -8,7 +8,9 @@ if (!JWT_SECRET) {
 }
 
 export function signToken(user) {
-  return jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
+  // pv = "password version": changes whenever the password is changed/reset, which voids older tokens
+  const pv = user.password_changed_at ? new Date(user.password_changed_at).getTime() : 0
+  return jwt.sign({ id: user.id, role: user.role, pv }, JWT_SECRET, { expiresIn: '7d' })
 }
 
 export async function requireAuth(req, res, next) {
@@ -17,10 +19,16 @@ export async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Not authenticated' })
   try {
     const payload = jwt.verify(token, JWT_SECRET)
-    const { rows: [user] } = await pool.query(
-      'SELECT id,name,email,role,dept,color,verified FROM users WHERE id = $1', [payload.id]
+    const { rows: [row] } = await pool.query(
+      'SELECT id,name,email,role,dept,color,verified,must_change_password,password_changed_at FROM users WHERE id = $1', [payload.id]
     )
-    if (!user) return res.status(401).json({ error: 'User not found' })
+    if (!row) return res.status(401).json({ error: 'User not found' })
+    const { password_changed_at, ...user } = row
+    // Tokens issued before the last password change/reset are no longer valid
+    const currentPv = password_changed_at ? new Date(password_changed_at).getTime() : 0
+    if ((payload.pv || 0) !== currentPv) {
+      return res.status(401).json({ error: 'Session expired — please sign in again' })
+    }
     req.user = user
     next()
   } catch {

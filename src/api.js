@@ -34,6 +34,7 @@ export const api = {
     resend: (data) => req('POST', '/auth/resend', data),
     login: (data) => req('POST', '/auth/login', data),
     me: () => req('GET', '/auth/me'),
+    changePassword: (data) => req('POST', '/auth/change-password', data),
   },
   tickets: {
     list: () => req('GET', '/tickets'),
@@ -49,6 +50,7 @@ export const api = {
     create: (data) => req('POST', '/users', data),
     update: (id, data) => req('PATCH', `/users/${id}`, data),
     delete: (id) => req('DELETE', `/users/${id}`),
+    resetPassword: (id, data = {}) => req('POST', `/users/${id}/reset-password`, data),
   },
   departments: {
     list: () => req('GET', '/departments'),

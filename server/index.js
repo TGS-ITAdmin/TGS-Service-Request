@@ -1,3 +1,4 @@
+import 'express-async-errors'
 import express from 'express'
 import cors from 'cors'
 import { fileURLToPath } from 'url'
@@ -32,6 +33,13 @@ app.get('/api/emails', requireAuth, (req, res) => res.json(sentEmails))
 const distDir = join(__dirname, '../dist')
 app.use(express.static(distDir))
 app.get('*', (req, res) => res.sendFile(join(distDir, 'index.html')))
+
+// Any error thrown in an async route lands here instead of crashing the server
+app.use((err, req, res, next) => {
+  console.error('Unhandled route error:', err)
+  if (res.headersSent) return next(err)
+  res.status(500).json({ error: 'Internal server error' })
+})
 
 async function start() {
   try {

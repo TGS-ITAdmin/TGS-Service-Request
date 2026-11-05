@@ -5,6 +5,7 @@ import TicketDetail from './pages/TicketDetail.jsx'
 import NewTicket from './pages/NewTicket.jsx'
 import PeopleSettings from './pages/PeopleSettings.jsx'
 import Login from './pages/Login.jsx'
+import ChangePassword from './pages/ChangePassword.jsx'
 import { AuthProvider, useAuth, isStaff, isAdmin } from './AuthContext.jsx'
 import { Avatar } from './components/Badge.jsx'
 
@@ -14,6 +15,7 @@ function Shell() {
   const [selectedTicket, setSelectedTicket] = useState(null)
   const [showNew, setShowNew] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [showPassword, setShowPassword] = useState(false)
 
   const refresh = () => setRefreshKey(k => k + 1)
 
@@ -28,6 +30,7 @@ function Shell() {
     return <div className="flex items-center justify-center h-screen text-gray-400">Loading…</div>
   }
   if (!user) return <Login />
+  if (user.must_change_password) return <ChangePassword forced />
 
   const NAV = [
     { id: 'dashboard', label: 'Dashboard', icon: '▦' },
@@ -82,7 +85,8 @@ function Shell() {
               <div className="text-white text-xs font-medium truncate">{user.name}</div>
               <div className="text-slate-500 text-xs truncate">{user.email}</div>
             </div>
-            <button onClick={logout} className="ml-auto text-slate-500 hover:text-white text-xs" title="Sign out">⎋</button>
+            <button onClick={() => setShowPassword(true)} className="ml-auto text-slate-500 hover:text-white text-xs" title="Change password">🔑</button>
+            <button onClick={logout} className="text-slate-500 hover:text-white text-xs" title="Sign out">⎋</button>
           </div>
         </div>
       </nav>
@@ -107,6 +111,7 @@ function Shell() {
         {page === 'people' && isStaff(user) && <PeopleSettings />}
       </main>
 
+      {showPassword && <ChangePassword onClose={() => setShowPassword(false)} />}
       {showNew && <NewTicket onClose={() => setShowNew(false)} onCreated={handleNewCreated} />}
     </div>
   )

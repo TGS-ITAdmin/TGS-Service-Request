@@ -6,6 +6,7 @@ import { signToken, requireAuth } from '../auth.js'
 import { sendMail, verificationEmail } from '../email.js'
 
 const r = Router()
+const publicUser = u => ({ id: u.id, name: u.name, email: u.email, role: u.role, dept: u.dept, color: u.color, must_change_password: !!u.must_change_password })
 const COLORS = ['#3b82f6','#06b6d4','#10b981','#f59e0b','#8b5cf6','#ef4444','#ec4899','#64748b']
 
 // POST /api/auth/register — open self-signup, always creates a requestor
@@ -43,7 +44,7 @@ r.post('/verify', async (req, res) => {
   if (!code || user.verify_code !== String(code).trim()) return res.status(400).json({ error: 'Incorrect verification code' })
   await pool.query('UPDATE users SET verified = true, verify_code = NULL WHERE id = $1', [user.id])
   const token = signToken(user)
-  res.json({ ok: true, token, user: { id: user.id, name: user.name, email: user.email, role: user.role, dept: user.dept, color: user.color } })
+  res.json({ ok: true, token, user: publicUser(user) })
 })
 
 // POST /api/auth/resend — { email }
@@ -64,7 +65,21 @@ r.post('/login', async (req, res) => {
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Invalid email or password' })
   if (!user.verified) return res.status(403).json({ error: 'unverified', message: 'Please verify your email first' })
   const token = signToken(user)
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role, dept: user.dept, color: user.color } })
+  res.json({ token, user: publicUser(user) })
+})
+
+// POST /api/auth/change-password — { currentPassword, newPassword }; returns a fresh token
+r.post('/change-password', requireAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {}
+  if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' })
+  const { rows: [u] } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id])
+  if (!bcrypt.compareSync(currentPassword || '', u.password_hash)) return res.status(400).json({ error: 'Current password is incorrect' })
+  if (currentPassword === newPassword) return res.status(400).json({ error: 'New password must be different from the current one' })
+  const { rows: [upd] } = await pool.query(
+    'UPDATE users SET password_hash = $1, must_change_password = false, password_changed_at = now() WHERE id = $2 RETURNING password_changed_at',
+    [bcrypt.hashSync(newPassword, 10), u.id]
+  )
+  res.json({ ok: true, token: signToken({ ...u, password_changed_at: upd.password_changed_at }), user: publicUser({ ...u, must_change_password: false }) })
 })
 
 // GET /api/auth/me
