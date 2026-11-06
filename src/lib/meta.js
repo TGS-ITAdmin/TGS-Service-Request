@@ -65,4 +65,28 @@ export function fmtSize(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-export const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+// ---- attachment previews ----
+// Only these types are ever rendered in the viewer. HTML, SVG, scripts and unknown types are never displayed;
+// they get a "no preview" card with a Download button instead.
+const BY_MIME = {
+  'image/png': 'image', 'image/jpeg': 'image', 'image/gif': 'image', 'image/webp': 'image',
+  'application/pdf': 'pdf',
+  'text/plain': 'text', 'text/csv': 'text', 'text/markdown': 'text', 'application/json': 'text',
+  'video/mp4': 'video', 'video/webm': 'video',
+  'audio/mpeg': 'audio', 'audio/wav': 'audio', 'audio/x-wav': 'audio', 'audio/mp4': 'audio', 'audio/ogg': 'audio', 'audio/webm': 'audio',
+}
+const BY_EXT = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  pdf: 'application/pdf',
+  txt: 'text/plain', log: 'text/plain', csv: 'text/csv', md: 'text/markdown', json: 'application/json',
+  mp4: 'video/mp4', webm: 'video/webm',
+  mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg',
+}
+// -> { kind: 'image'|'pdf'|'text'|'video'|'audio'|'none', mime }   (mime is the type the viewer will use)
+export function previewInfo(a) {
+  const declared = String(a?.mime || '').split(';')[0].trim().toLowerCase()
+  if (BY_MIME[declared]) return { kind: BY_MIME[declared], mime: declared }
+  const ext = String(a?.filename || '').split('.').pop().toLowerCase()      // browsers often send no type; trust the extension
+  const mime = BY_EXT[ext]
+  return mime ? { kind: BY_MIME[mime], mime } : { kind: 'none', mime: 'application/octet-stream' }
+}

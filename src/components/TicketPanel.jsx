@@ -4,8 +4,9 @@ import { Avatar } from './Badge.jsx'
 import { useAuth, isStaff, canEditTicket } from '../AuthContext.jsx'
 import {
   PRIORITIES, PRIORITY_META, STATUSES, STATUS_META, isDone,
-  fmtDateTime, fmtSize, IMAGE_MIMES,
+  fmtDateTime, fmtSize, previewInfo,
 } from '../lib/meta.js'
+import AttachmentPreview, { saveAttachment } from './AttachmentPreview.jsx'
 import { CompleteCircle, CircleIcon, IconPlus, IconClose, IconDownload, IconFile, IconClip } from './Icons.jsx'
 
 const FIELD_CTRL = 'w-full bg-transparent rounded border border-transparent hover:border-gray-300 hover:bg-white focus:border-blue-400 focus:bg-white focus:outline-none px-2 py-1 text-sm cursor-pointer'
@@ -45,43 +46,33 @@ function eventText(a) {
   }
 }
 
-function AttachmentItem({ ticketId, a, canDelete, onDelete }) {
+function AttachmentItem({ ticketId, a, canDelete, onDelete, onOpen }) {
   const [thumb, setThumb] = useState(null)
   useEffect(() => {
     let url = null
     let cancelled = false
-    if (IMAGE_MIMES.includes(a.mime) && a.size < 3 * 1024 * 1024 && typeof URL.createObjectURL === 'function') {
+    const info = previewInfo(a)
+    if (info.kind === 'image' && a.size < 3 * 1024 * 1024 && typeof URL.createObjectURL === 'function') {
       api.tickets.downloadAttachment(ticketId, a.id).then(blob => {
         if (cancelled) return
-        url = URL.createObjectURL(blob)
+        url = URL.createObjectURL(new Blob([blob], { type: info.mime }))
         setThumb(url)
       }).catch(() => {})
     }
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url) }
-  }, [ticketId, a.id, a.mime, a.size])
-
-  const download = async () => {
-    try {
-      const blob = await api.tickets.downloadAttachment(ticketId, a.id)
-      const url = URL.createObjectURL(blob)
-      const el = document.createElement('a')
-      el.href = url; el.download = a.filename
-      document.body.appendChild(el); el.click(); el.remove()
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
-    } catch (e) { alert(e.message) }
-  }
+  }, [ticketId, a.id, a.mime, a.size, a.filename])
 
   return (
     <div className="group flex items-center gap-3 py-2 border-b border-gray-100">
-      <div className="w-10 h-10 rounded bg-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0 text-gray-400">
+      <button onClick={onOpen} aria-label={`Preview ${a.filename}`} className="w-10 h-10 rounded bg-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0 text-gray-400 hover:ring-2 hover:ring-blue-300">
         {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" /> : <IconFile width={18} height={18} />}
-      </div>
+      </button>
       <div className="min-w-0 flex-1">
-        <button onClick={download} className="text-sm text-blue-600 hover:underline truncate block max-w-full text-left">{a.filename}</button>
+        <button onClick={onOpen} title="Click to preview" className="text-sm text-blue-600 hover:underline truncate block max-w-full text-left">{a.filename}</button>
         <div className="text-xs text-gray-400">{fmtSize(a.size)} · {a.uploaded_by_name} · {fmtDateTime(a.created_at)}</div>
       </div>
-      <button title="Download" onClick={download} className="text-gray-400 hover:text-gray-700"><IconDownload /></button>
-      {canDelete && <button title="Remove" onClick={onDelete} className="text-gray-300 hover:text-red-500"><IconClose /></button>}
+      <button title="Download" aria-label={`Download ${a.filename}`} onClick={() => saveAttachment(ticketId, a)} className="text-gray-400 hover:text-gray-700"><IconDownload /></button>
+      {canDelete && <button title="Remove" aria-label={`Remove ${a.filename}`} onClick={onDelete} className="text-gray-300 hover:text-red-500"><IconClose /></button>}
     </div>
   )
 }
@@ -102,6 +93,7 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
   const [addingSub, setAddingSub] = useState(false)
   const [subDraft, setSubDraft] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [previewId, setPreviewId] = useState(null)
   const [ratingDraft, setRatingDraft] = useState(0)
   const [ratingComment, setRatingComment] = useState('')
   const fileRef = useRef(null)
@@ -118,7 +110,7 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
     }
   }, [ticketId])
 
-  useEffect(() => { setData(null); setError(''); setAddingSub(false); setReply('') }, [ticketId])
+  useEffect(() => { setData(null); setError(''); setAddingSub(false); setReply(''); setPreviewId(null) }, [ticketId])
   useEffect(() => { load() }, [load, version])
 
   const run = async (fn) => {
@@ -391,6 +383,7 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
           {attachments.length === 0 && <div className="text-sm text-gray-400">No attachments. Files can be up to 10 MB.</div>}
           {attachments.map(a => (
             <AttachmentItem key={a.id} ticketId={ticketId} a={a}
+              onOpen={() => setPreviewId(a.id)}
               canDelete={canEdit || a.uploaded_by === user.id}
               onDelete={() => { if (confirm(`Remove ${a.filename}?`)) run(() => api.tickets.deleteAttachment(ticketId, a.id)) }} />
           ))}
@@ -474,6 +467,9 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
           </button>
         </div>
       </div>
+      {previewId && (
+        <AttachmentPreview ticketId={ticketId} items={attachments} startId={previewId} onClose={() => setPreviewId(null)} />
+      )}
     </aside>
   )
 }
