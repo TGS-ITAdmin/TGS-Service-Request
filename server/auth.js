@@ -36,17 +36,18 @@ export async function requireAuth(req, res, next) {
   }
 }
 
+// Roles, highest first. "Staff" works tickets; "admin level" (owner + admin) also manages people and settings.
+export const ROLES = ['owner', 'admin', 'manager', 'requestor']
+export const ROLE_RANK = { owner: 4, admin: 3, manager: 2, requestor: 1 }
+export const STAFF_ROLES = ['owner', 'admin', 'manager']
+export const ADMIN_ROLES = ['owner', 'admin']
+
 export function requireStaff(req, res, next) {
-  if (!['admin', 'manager', 'agent'].includes(req.user.role)) return res.status(403).json({ error: 'Staff only' })
+  if (!STAFF_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Staff only' })
   next()
 }
 
 export function requireAdmin(req, res, next) {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' })
-  next()
-}
-
-export function requireManager(req, res, next) {
-  if (!['admin', 'manager'].includes(req.user.role)) return res.status(403).json({ error: 'Manager or admin only' })
+  if (!ADMIN_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Admin only' })
   next()
 }

@@ -2,12 +2,11 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { randomUUID, randomInt } from 'crypto'
 import pool from '../db.js'
-import { requireAuth, requireStaff, requireAdmin } from '../auth.js'
+import { requireAuth, requireStaff, requireAdmin, ROLES, ROLE_RANK } from '../auth.js'
 
 const r = Router()
 r.use(requireAuth)
 
-const ROLES = ['admin', 'manager', 'agent', 'requestor']
 const COLORS = ['#3b82f6','#06b6d4','#10b981','#f59e0b','#8b5cf6','#ef4444','#ec4899','#64748b']
 
 // Readable temp password (no look-alike characters like 0/O or 1/l/I)
@@ -16,20 +15,26 @@ function generatePassword(len = 12) {
   return Array.from({ length: len }, () => chars[randomInt(chars.length)]).join('')
 }
 
-async function adminCount() {
-  const { rows: [{ c }] } = await pool.query("SELECT COUNT(*)::int c FROM users WHERE role = 'admin'")
+async function ownerCount() {
+  const { rows: [{ c }] } = await pool.query("SELECT COUNT(*)::int c FROM users WHERE role = 'owner'")
   return c
 }
+
+// Hierarchy: an Owner manages everyone; an Admin manages only people ranked below Admin (Managers, Requestors).
+const rank = (role) => ROLE_RANK[role] || 0
+const canManage = (actor, target) => actor.role === 'owner' || rank(target.role) < rank(actor.role)
+const assignableRoles = (actor) => actor.role === 'owner' ? ROLES : ROLES.filter(r => rank(r) < rank(actor.role))
+const HIERARCHY_MSG = 'Only an Owner can manage Admin and Owner accounts'
 
 // GET /api/users — staff only (requestors don't need the directory)
 r.get('/', requireStaff, async (req, res) => {
   const { rows } = await pool.query(`
     SELECT id,name,email,role,dept,color,verified,must_change_password FROM users
-    ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'manager' THEN 1 WHEN 'agent' THEN 2 ELSE 3 END, name`)
+    ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, name`)
   res.json(rows)
 })
 
-// GET /api/users/ratings — admin only: per-agent rating summary
+// GET /api/users/ratings — admin only: rating summary per assignee
 r.get('/ratings', requireAdmin, async (req, res) => {
   const { rows: summary } = await pool.query(`
     SELECT r.agent_id, u.name agent_name, COUNT(*) count, ROUND(AVG(r.stars)::numeric,2) avg_stars
@@ -52,12 +57,13 @@ r.post('/', requireAdmin, async (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: 'Temporary password must be at least 8 characters' })
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address' })
   if (role && !ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' })
+  if (!assignableRoles(req.user).includes(role || 'manager')) return res.status(403).json({ error: HIERARCHY_MSG })
   const { rows: [existing] } = await pool.query('SELECT 1 FROM users WHERE email = $1', [email.toLowerCase()])
   if (existing) return res.status(409).json({ error: 'Email already exists' })
   const u = {
     id: randomUUID(), name: name.trim(), email: email.toLowerCase(),
     password_hash: bcrypt.hashSync(password, 10),
-    role: role || 'agent', dept: dept || null, color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    role: role || 'manager', dept: dept || null, color: COLORS[Math.floor(Math.random() * COLORS.length)],
   }
   await pool.query(
     'INSERT INTO users (id,name,email,password_hash,role,dept,color,verified,must_change_password) VALUES ($1,$2,$3,$4,$5,$6,$7,true,true)',
@@ -70,12 +76,14 @@ r.post('/', requireAdmin, async (req, res) => {
 r.patch('/:id', requireAdmin, async (req, res) => {
   const { rows: [u] } = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id])
   if (!u) return res.status(404).json({ error: 'Not found' })
+  if (!canManage(req.user, u)) return res.status(403).json({ error: HIERARCHY_MSG })
   const role = req.body?.role !== undefined ? req.body.role : u.role
   const dept = req.body?.dept !== undefined ? (req.body.dept || null) : u.dept
   if (!ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' })
   if (role !== u.role) {
-    if (u.id === req.user.id) return res.status(400).json({ error: 'You cannot change your own role. Ask another admin.' })
-    if (u.role === 'admin' && (await adminCount()) <= 1) return res.status(400).json({ error: 'At least one admin is required' })
+    if (u.id === req.user.id) return res.status(400).json({ error: 'You cannot change your own role. Ask another Owner.' })
+    if (!assignableRoles(req.user).includes(role)) return res.status(403).json({ error: HIERARCHY_MSG })
+    if (u.role === 'owner' && (await ownerCount()) <= 1) return res.status(400).json({ error: 'At least one Owner is required' })
   }
   await pool.query('UPDATE users SET role = $1, dept = $2 WHERE id = $3', [role, dept, u.id])
   res.json({ ok: true })
@@ -85,8 +93,9 @@ r.patch('/:id', requireAdmin, async (req, res) => {
 // Omit password to have one generated. All of the user's existing sessions are signed out.
 r.post('/:id/reset-password', requireAdmin, async (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'Use "Change password" for your own account' })
-  const { rows: [u] } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id])
+  const { rows: [u] } = await pool.query('SELECT id, role FROM users WHERE id = $1', [req.params.id])
   if (!u) return res.status(404).json({ error: 'Not found' })
+  if (!canManage(req.user, u)) return res.status(403).json({ error: HIERARCHY_MSG })
   const custom = req.body?.password
   if (custom !== undefined && custom !== null && custom !== '' && String(custom).length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters' })
@@ -107,7 +116,8 @@ r.delete('/:id', requireAdmin, async (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' })
   const { rows: [u] } = await pool.query('SELECT role FROM users WHERE id = $1', [req.params.id])
   if (!u) return res.status(404).json({ error: 'Not found' })
-  if (u.role === 'admin' && (await adminCount()) <= 1) return res.status(400).json({ error: 'At least one admin is required' })
+  if (!canManage(req.user, u)) return res.status(403).json({ error: HIERARCHY_MSG })
+  if (u.role === 'owner' && (await ownerCount()) <= 1) return res.status(400).json({ error: 'At least one Owner is required' })
   await pool.query('UPDATE routing SET user_id = NULL WHERE user_id = $1', [req.params.id])
   await pool.query('UPDATE tickets SET assignee = NULL WHERE assignee = $1', [req.params.id])
   await pool.query('UPDATE tickets SET requestor_id = NULL WHERE requestor_id = $1', [req.params.id])

@@ -154,8 +154,6 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
 
   const { ticket: t, subtasks = [], attachments = [], rating } = data
   const done = isDone(t.status)
-  // admins/managers can complete any ticket; an agent can complete tickets assigned to them (not closed ones)
-  const canComplete = canEdit || (user.role === 'agent' && t.assignee === user.id && t.status !== 'closed')
   const openSubtasks = subtasks.filter(s => !s.done).length
   const toggleComplete = () => {
     if (!done && openSubtasks > 0 && !confirm(`This ticket still has ${openSubtasks} incomplete subtask${openSubtasks > 1 ? 's' : ''}. Mark it complete anyway?`)) return
@@ -210,7 +208,7 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
     <aside className="w-[520px] max-w-[55vw] border-l border-gray-200 bg-white flex flex-col flex-shrink-0 min-h-0" data-testid="ticket-panel">
       {/* Top bar */}
       <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 flex-shrink-0">
-        {canComplete ? (
+        {canEdit ? (
           <button
             onClick={toggleComplete}
             className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -277,13 +275,13 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
             ) : <span className="px-2 text-sm">{t.due_date || <span className="text-gray-400">None</span>}</span>}
           </Field>
           <Field label="Status">
-            {canComplete ? (
+            {canEdit ? (
               <select aria-label="Status" className={FIELD_CTRL} value={t.status} onChange={e => {
                 const v = e.target.value
                 if (isDone(v) && !done && openSubtasks > 0 && !confirm(`This ticket still has ${openSubtasks} incomplete subtask${openSubtasks > 1 ? 's' : ''}. Continue anyway?`)) return
                 patch({ status: v })
               }}>
-                {STATUSES.filter(s => canEdit || s !== 'closed').map(s => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
+                {STATUSES.map(s => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
               </select>
             ) : <span className="px-2 text-sm">{STATUS_META[t.status]?.label}</span>}
           </Field>
@@ -438,7 +436,7 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
               </div>
             ) : (
               <div key={'m' + item.m.id} className="flex gap-3">
-                <Avatar name={item.m.sender_name} color={item.m.sender_type === 'agent' ? '#2563eb' : '#8b5cf6'} />
+                <Avatar name={item.m.sender_name} color={item.m.sender_type === 'staff' ? '#2563eb' : '#8b5cf6'} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-gray-900">{item.m.sender_name}</span>

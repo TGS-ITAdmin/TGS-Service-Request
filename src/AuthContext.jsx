@@ -44,6 +44,10 @@ export function useAuth() {
   return ctx
 }
 
-export const isStaff = (user) => !!user && ['admin', 'manager', 'agent'].includes(user.role)
-export const canEditTicket = (user) => !!user && ['admin', 'manager'].includes(user.role)
-export const isAdmin = (user) => !!user && user.role === 'admin'
+// Roles: owner > admin > manager > requestor
+export const STAFF_ROLES = ['owner', 'admin', 'manager']
+export const ROLE_RANK = { owner: 4, admin: 3, manager: 2, requestor: 1 }
+export const isStaff = (user) => !!user && STAFF_ROLES.includes(user.role)
+export const canEditTicket = isStaff                       // every staff role can work any ticket
+export const isAdmin = (user) => !!user && ['owner', 'admin'].includes(user.role)   // manages people & settings
+export const isOwner = (user) => !!user && user.role === 'owner'

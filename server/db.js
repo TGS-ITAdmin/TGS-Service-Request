@@ -124,6 +124,13 @@ export async function initDb() {
   // Migrations for databases created before user management existed
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false')
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ')
+  // Role model is Owner / Admin / Manager / Requestor. Convert anything left over from the old model.
+  await pool.query("UPDATE users SET role = 'manager' WHERE role = 'agent'")
+  await pool.query("UPDATE messages SET sender_type = 'staff' WHERE sender_type = 'agent'")
+  // Someone must be Owner: if there isn't one, the earliest-created Admin becomes it.
+  await pool.query(`UPDATE users SET role = 'owner'
+    WHERE id = (SELECT id FROM users WHERE role = 'admin' ORDER BY created_at, id LIMIT 1)
+      AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')`)
 
   const { rows: [{ c }] } = await pool.query('SELECT COUNT(*)::int c FROM users')
   if (c > 0) return
@@ -131,13 +138,13 @@ export async function initDb() {
   console.log('🌱 Seeding initial data...')
   const hash = p => bcrypt.hashSync(p, 10)
   const insUser = 'INSERT INTO users (id,name,email,password_hash,role,dept,color,verified) VALUES ($1,$2,$3,$4,$5,$6,$7,true)'
-  await pool.query(insUser, ['u-admin', 'Admin User',   'admin@company.com', hash('Admin@123'),  'admin',   null,       '#1e3a8a'])
+  await pool.query(insUser, ['u-admin', 'Admin User',   'admin@company.com', hash('Admin@123'),  'owner',   null,       '#1e3a8a'])
   await pool.query(insUser, ['u1',      'Alice Chen',   'alice@company.com', hash('Staff@123'),  'manager', 'dept-it',  '#3b82f6'])
-  await pool.query(insUser, ['u2',      'Bob Martinez', 'bob@company.com',   hash('Staff@123'),  'agent',   'dept-it',  '#06b6d4'])
+  await pool.query(insUser, ['u2',      'Bob Martinez', 'bob@company.com',   hash('Staff@123'),  'manager',   'dept-it',  '#06b6d4'])
   await pool.query(insUser, ['u3',      'Carol Smith',  'carol@company.com', hash('Staff@123'),  'manager', 'dept-hr',  '#10b981'])
-  await pool.query(insUser, ['u4',      'David Lee',    'david@company.com', hash('Staff@123'),  'agent',   'dept-fin', '#f59e0b'])
+  await pool.query(insUser, ['u4',      'David Lee',    'david@company.com', hash('Staff@123'),  'manager',   'dept-fin', '#f59e0b'])
   await pool.query(insUser, ['u5',      'Eva Brown',    'eva@company.com',   hash('Staff@123'),  'manager', 'dept-ops', '#8b5cf6'])
-  await pool.query(insUser, ['u6',      'Frank Davis',  'frank@company.com', hash('Staff@123'),  'agent',   'dept-it',  '#ef4444'])
+  await pool.query(insUser, ['u6',      'Frank Davis',  'frank@company.com', hash('Staff@123'),  'manager',   'dept-it',  '#ef4444'])
 
   const insDept = 'INSERT INTO departments (id,name,color) VALUES ($1,$2,$3)'
   await pool.query(insDept, ['dept-it','IT Support','#3b82f6'])

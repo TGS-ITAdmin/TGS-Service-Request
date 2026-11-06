@@ -8,7 +8,7 @@ import ticketsRouter from './routes/tickets.js'
 import usersRouter from './routes/users.js'
 import departmentsRouter from './routes/departments.js'
 import { sentEmails } from './email.js'
-import { requireAuth } from './auth.js'
+import { requireAuth, requireAdmin } from './auth.js'
 import { initDb } from './db.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -27,7 +27,7 @@ app.use('/api/users', usersRouter)
 app.use('/api/departments', departmentsRouter)
 
 // Sent-email log (testing aid — Ethereal preview links)
-app.get('/api/emails', requireAuth, (req, res) => res.json(sentEmails))
+app.get('/api/emails', requireAuth, requireAdmin, (req, res) => res.json(sentEmails))
 
 // Serve the built React SPA (npm run build → dist/)
 const distDir = join(__dirname, '../dist')

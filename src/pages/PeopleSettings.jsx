@@ -2,14 +2,14 @@ import { useState, useEffect, useMemo } from 'react'
 import { api } from '../api.js'
 import { Avatar } from '../components/Badge.jsx'
 import { Modal } from '../components/Modal.jsx'
-import { useAuth, isAdmin } from '../AuthContext.jsx'
+import { useAuth, isAdmin, ROLE_RANK } from '../AuthContext.jsx'
 
-const ROLES = ['admin', 'manager', 'agent', 'requestor']
+const ROLES = ['owner', 'admin', 'manager', 'requestor']
 const ROLE_INFO = {
-  admin:     { label: 'Admin',     desc: 'Full access: manage people, departments, routing, and every ticket.', cls: 'bg-purple-100 text-purple-700' },
-  manager:   { label: 'Manager',   desc: 'See all tickets, edit ticket fields, reply, and view the team.',      cls: 'bg-blue-100 text-blue-700' },
-  agent:     { label: 'Agent',     desc: 'See all tickets and reply. Cannot edit ticket fields.',               cls: 'bg-cyan-100 text-cyan-700' },
-  requestor: { label: 'Requestor', desc: 'Can only create and view their own tickets.',                         cls: 'bg-gray-100 text-gray-600' },
+  owner:     { label: 'Owner',     desc: 'Top level. Everything an Admin can do, and the only role that can create, change or remove Admin and Owner accounts.', cls: 'bg-amber-100 text-amber-800' },
+  admin:     { label: 'Admin',     desc: 'Works every ticket and manages Managers, Requestors, departments and routing. Cannot change Admins or Owners.',      cls: 'bg-purple-100 text-purple-700' },
+  manager:   { label: 'Manager',   desc: 'Works every ticket: edit any field, assign, complete, subtasks and internal notes. Can view the team but not change it.', cls: 'bg-blue-100 text-blue-700' },
+  requestor: { label: 'Requestor', desc: 'Can only create and follow their own tickets.',                                                                     cls: 'bg-gray-100 text-gray-600' },
 }
 
 function genPassword() {
@@ -30,6 +30,9 @@ function CopyButton({ text }) {
 export default function PeopleSettings() {
   const { user } = useAuth()
   const admin = isAdmin(user)
+  // Owners manage everyone; Admins manage only people ranked below Admin (the server enforces this too)
+  const canManageUser = (u) => user.role === 'owner' || ROLE_RANK[u.role] < ROLE_RANK[user.role]
+  const assignable = user.role === 'owner' ? ROLES : ROLES.filter(r => ROLE_RANK[r] < ROLE_RANK[user.role])
   const [tab, setTab] = useState('people')
   const [users, setUsers] = useState([])
   const [departments, setDepartments] = useState([])
@@ -39,7 +42,7 @@ export default function PeopleSettings() {
   const [showNewUser, setShowNewUser] = useState(false)
   const [showNewDept, setShowNewDept] = useState(false)
   const [showRoles, setShowRoles] = useState(false)
-  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'agent', dept: '', password: genPassword() })
+  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'manager', dept: '', password: genPassword() })
   const [newDept, setNewDept] = useState({ name: '', color: '#3b82f6' })
   const [error, setError] = useState('')
   const [notice, setNotice] = useState(null)         // { email, password, title }
@@ -73,7 +76,7 @@ export default function PeopleSettings() {
     )
   }, [users, query, roleFilter])
 
-  const adminTotal = users.filter(u => u.role === 'admin').length
+  const ownerTotal = users.filter(u => u.role === 'owner').length
 
   const handleAddUser = async (e) => {
     e.preventDefault()
@@ -82,7 +85,7 @@ export default function PeopleSettings() {
       await api.users.create({ ...newUser, dept: newUser.dept || null })
       setNotice({ title: `Created ${newUser.email}`, email: newUser.email, password: newUser.password })
       setShowNewUser(false)
-      setNewUser({ name: '', email: '', role: 'agent', dept: '', password: genPassword() })
+      setNewUser({ name: '', email: '', role: 'manager', dept: '', password: genPassword() })
       load()
     } catch (e) { setError(e.message) }
   }
@@ -99,7 +102,8 @@ export default function PeopleSettings() {
   }
 
   const updateRole = async (u, role) => {
-    const verb = role === 'admin' ? `Make ${u.name} an ADMIN? They will have full control, including managing other people.`
+    const verb = role === 'owner' ? `Make ${u.name} an OWNER? They will have top-level control, including over every Admin and Owner account (yours too).`
+      : role === 'admin' ? `Make ${u.name} an ADMIN? They will be able to manage Managers, Requestors, departments and routing.`
       : `Change ${u.name}'s role from ${ROLE_INFO[u.role].label} to ${ROLE_INFO[role].label}?`
     if (!confirm(verb)) { load(); return }
     try { await api.users.update(u.id, { role }); load() } catch (e) { alert(e.message); load() }
@@ -222,7 +226,8 @@ export default function PeopleSettings() {
                 )}
                 {filteredUsers.map(u => {
                   const isSelf = u.id === user.id
-                  const lastAdmin = u.role === 'admin' && adminTotal <= 1
+                  const manageable = admin && canManageUser(u)
+                  const lastOwner = u.role === 'owner' && ownerTotal <= 1
                   return (
                     <tr key={u.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
@@ -241,17 +246,18 @@ export default function PeopleSettings() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        {admin && !isSelf ? (
-                          <select className="input py-1 text-xs w-32" value={u.role} disabled={lastAdmin} title={lastAdmin ? 'At least one admin is required' : ''} onChange={e => updateRole(u, e.target.value)}>
-                            {ROLES.map(r => <option key={r} value={r}>{ROLE_INFO[r].label}</option>)}
+                        {manageable && !isSelf ? (
+                          <select aria-label={`Role for ${u.name}`} className="input py-1 text-xs w-32" value={u.role} disabled={lastOwner} title={lastOwner ? 'At least one Owner is required' : ''} onChange={e => updateRole(u, e.target.value)}>
+                            {assignable.map(r => <option key={r} value={r}>{ROLE_INFO[r].label}</option>)}
                           </select>
                         ) : (
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_INFO[u.role]?.cls}`} title={isSelf ? 'You cannot change your own role' : ''}>{ROLE_INFO[u.role]?.label || u.role}</span>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_INFO[u.role]?.cls}`}
+                            title={isSelf ? 'You cannot change your own role' : admin && !manageable ? 'Only an Owner can change this account' : ''}>{ROLE_INFO[u.role]?.label || u.role}</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-sm">
-                        {admin ? (
-                          <select className="input py-1 text-xs w-36" value={u.dept || ''} onChange={e => updateDept(u.id, e.target.value)}>
+                        {manageable ? (
+                          <select aria-label={`Department for ${u.name}`} className="input py-1 text-xs w-36" value={u.dept || ''} onChange={e => updateDept(u.id, e.target.value)}>
                             <option value="">None</option>
                             {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                           </select>
@@ -262,8 +268,8 @@ export default function PeopleSettings() {
                       {admin && (
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-3">
-                            {!isSelf && <button className="text-xs text-blue-600 hover:underline whitespace-nowrap" onClick={() => openReset(u)}>Reset password</button>}
-                            {!isSelf && !lastAdmin && <button className="text-gray-300 hover:text-red-500 transition-colors" title="Remove user" onClick={() => deleteUser(u)}>✕</button>}
+                            {manageable && !isSelf && <button className="text-xs text-blue-600 hover:underline whitespace-nowrap" onClick={() => openReset(u)}>Reset password</button>}
+                            {manageable && !isSelf && !lastOwner && <button className="text-gray-300 hover:text-red-500 transition-colors" title="Remove user" onClick={() => deleteUser(u)}>✕</button>}
                           </div>
                         </td>
                       )}
@@ -355,8 +361,8 @@ export default function PeopleSettings() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Role</label>
-                <select className="input" value={newUser.role} onChange={e => setNewUser(u => ({ ...u, role: e.target.value }))}>
-                  {ROLES.map(r => <option key={r} value={r}>{ROLE_INFO[r].label}</option>)}
+                <select aria-label="New person role" className="input" value={newUser.role} onChange={e => setNewUser(u => ({ ...u, role: e.target.value }))}>
+                  {assignable.map(r => <option key={r} value={r}>{ROLE_INFO[r].label}</option>)}
                 </select>
               </div>
               <div>

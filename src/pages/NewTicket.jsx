@@ -116,7 +116,7 @@ export default function NewTicket({ onClose, onCreated }) {
             </select>
           </div>
         </div>
-        <p className="text-xs text-gray-400 -mt-2">Tickets are routed to the right agent automatically based on department and category.</p>
+        <p className="text-xs text-gray-400 -mt-2">Tickets are routed to the right person automatically based on department and category.</p>
 
         <div>
           <label className="label">Attachments</label>

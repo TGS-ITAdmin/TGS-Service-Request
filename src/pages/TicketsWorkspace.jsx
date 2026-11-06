@@ -102,9 +102,6 @@ export default function TicketsWorkspace({ selectedId, onSelect, onNew, refreshK
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedId, onSelect])
 
-  // Admins/managers can complete any ticket; an agent can complete tickets assigned to them (never closed ones).
-  const canComplete = (t) => canEdit || (user.role === 'agent' && t.assignee === user.id && t.status !== 'closed')
-  const canMoveTo = (t, status) => canEdit || (canComplete(t) && status !== 'closed')
   const confirmIncomplete = (t) => {
     const open = (t.subtask_total || 0) - (t.subtask_done || 0)
     return open <= 0 || confirm(`This ticket still has ${open} incomplete subtask${open > 1 ? 's' : ''}. Mark it complete anyway?`)
@@ -172,7 +169,7 @@ export default function TicketsWorkspace({ selectedId, onSelect, onNew, refreshK
       >
         <div className="flex items-center gap-2 px-3 py-1.5 min-w-0">
           <span onClick={stop}>
-            <CompleteCircle done={done} disabled={!canComplete(t)} title={canComplete(t) ? (done ? 'Mark incomplete' : 'Mark complete') : STATUS_META[t.status]?.label}
+            <CompleteCircle done={done} disabled={!canEdit} title={canEdit ? (done ? 'Mark incomplete' : 'Mark complete') : STATUS_META[t.status]?.label}
               onClick={() => { if (!done && !confirmIncomplete(t)) return; update(t, { status: done ? 'open' : 'resolved' }) }} />
           </span>
           <span className="truncate" title={t.title}>{t.title}</span>
@@ -266,13 +263,12 @@ export default function TicketsWorkspace({ selectedId, onSelect, onNew, refreshK
           const items = visible.filter(t => t.status === s)
           return (
             <div key={s}
-              onDragOver={staff ? (e => { e.preventDefault(); setDragOver(s) }) : undefined}
+              onDragOver={canEdit ? (e => { e.preventDefault(); setDragOver(s) }) : undefined}
               onDragLeave={() => setDragOver(d => d === s ? null : d)}
-              onDrop={staff ? (e => {
+              onDrop={canEdit ? (e => {
                 e.preventDefault(); setDragOver(null)
                 const t = tickets.find(x => x.id === e.dataTransfer.getData('text/plain'))
                 if (!t || t.status === s) return
-                if (!canMoveTo(t, s)) { alert('You can only move tickets assigned to you, and only a manager or admin can close them.'); return }
                 if (isDone(s) && !isDone(t.status) && !confirmIncomplete(t)) return
                 update(t, { status: s })
               }) : undefined}
@@ -290,7 +286,7 @@ export default function TicketsWorkspace({ selectedId, onSelect, onNew, refreshK
                   const due = formatDue(t.due_date, done)
                   const pr = PRIORITY_META[t.priority] || PRIORITY_META.medium
                   return (
-                    <div key={t.id} draggable={canComplete(t)} data-testid="board-card"
+                    <div key={t.id} draggable={canEdit} data-testid="board-card"
                       onDragStart={e => e.dataTransfer.setData('text/plain', t.id)}
                       onClick={() => onSelect(t.id)}
                       className={`bg-white rounded-lg border p-3 shadow-sm cursor-pointer hover:shadow ${selectedId === t.id ? 'border-blue-400' : 'border-gray-200'}`}>

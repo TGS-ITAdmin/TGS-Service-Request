@@ -2,7 +2,7 @@ import { Router } from 'express'
 import express from 'express'
 import { randomUUID } from 'crypto'
 import pool, { nextTicketNum } from '../db.js'
-import { requireAuth, requireStaff } from '../auth.js'
+import { requireAuth, requireStaff, STAFF_ROLES, ADMIN_ROLES } from '../auth.js'
 import { sendMail, notificationEmail } from '../email.js'
 import { dueDateFor, PRIORITIES } from '../sla.js'
 
@@ -13,9 +13,7 @@ const now = () => new Date().toISOString()
 // Every new ticket gets these subtasks (mirrors the "acknowledge the requestor" step in the Asana workflow)
 const DEFAULT_SUBTASKS = ['Send acknowledgement response to requestor']
 const MAX_FILE_BYTES = 10 * 1024 * 1024
-const AGENT_STATUSES = ['open', 'in_progress', 'resolved']
-const isStaff = u => ['admin', 'manager', 'agent'].includes(u.role)
-const canEditTicket = u => ['admin', 'manager'].includes(u.role)
+const isStaff = u => STAFF_ROLES.includes(u.role)
 
 async function autoAssign(deptId, category) {
   if (!deptId) return null
@@ -75,7 +73,7 @@ r.get('/:id', async (req, res) => {
   const { rows: attachments } = await pool.query(
     'SELECT id,ticket_id,filename,mime,size,uploaded_by,uploaded_by_name,created_at FROM attachments WHERE ticket_id = $1 ORDER BY created_at', [t.id])
   // ratings visible to admin + the requestor who left it
-  const showRating = req.user.role === 'admin' || (rating && rating.requestor_id === req.user.id)
+  const showRating = ADMIN_ROLES.includes(req.user.role) || (rating && rating.requestor_id === req.user.id)
   res.json({ ticket: t, messages, audit, subtasks, attachments, rating: showRating ? (rating || null) : (rating ? { exists: true } : null) })
 })
 
@@ -134,15 +132,6 @@ r.patch('/:id', async (req, res) => {
     return res.json(updated)
   }
 
-  // Agents may only update the status (start / complete / reopen) of tickets assigned to them
-  if (!canEditTicket(req.user)) {
-    const touched = Object.keys(patch).filter(k => patch[k] !== undefined)
-    if (touched.some(k => k !== 'status')) return res.status(403).json({ error: 'Agents can only change the status of their own tickets' })
-    if (t.assignee !== req.user.id) return res.status(403).json({ error: 'You can only update tickets assigned to you' })
-    if (t.status === 'closed') return res.status(403).json({ error: 'Only a manager or admin can reopen a closed ticket' })
-    if (!AGENT_STATUSES.includes(patch.status)) return res.status(403).json({ error: 'Only a manager or admin can close a ticket' })
-  }
-
   if (patch.priority !== undefined && patch.priority !== t.priority) {
     if (!PRIORITIES.includes(patch.priority)) return res.status(400).json({ error: 'Invalid priority' })
     if (patch.due_date === undefined) patch.due_date = dueDateFor(patch.priority)   // new priority => new due date
@@ -191,7 +180,7 @@ r.post('/:id/messages', async (req, res) => {
   const staff = isStaff(req.user)
   const msg = {
     id: randomUUID(), ticket_id: t.id, sender_id: req.user.id, sender_name: req.user.name,
-    sender_type: staff ? 'agent' : 'requestor', body: body.trim(),
+    sender_type: staff ? 'staff' : 'requestor', body: body.trim(),
     internal: !!(staff && internal), created_at: now(),
   }
   await pool.query(
@@ -263,9 +252,8 @@ r.patch('/:id/subtasks/:sid', requireStaff, async (req, res) => {
   res.json(updated)
 })
 
-// DELETE /api/tickets/:id/subtasks/:sid — admin/manager
+// DELETE /api/tickets/:id/subtasks/:sid — staff
 r.delete('/:id/subtasks/:sid', requireStaff, async (req, res) => {
-  if (!canEditTicket(req.user)) return res.status(403).json({ error: 'Only admins and managers can delete subtasks' })
   const { rows: [sub] } = await pool.query('DELETE FROM subtasks WHERE id = $1 AND ticket_id = $2 RETURNING title', [req.params.sid, req.params.id])
   if (!sub) return res.status(404).json({ error: 'Not found' })
   await addAudit(req.params.id, { actor: req.user.name, action: 'subtask-removed', field: 'Subtask', from: sub.title, to: null })
@@ -311,14 +299,14 @@ r.get('/:id/attachments/:aid', async (req, res) => {
   res.send(a.data)
 })
 
-// DELETE /api/tickets/:id/attachments/:aid — admin/manager, or whoever uploaded it
+// DELETE /api/tickets/:id/attachments/:aid — staff, or whoever uploaded it
 r.delete('/:id/attachments/:aid', async (req, res) => {
   const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
   if (!t) return res.status(404).json({ error: 'Not found' })
   if (!ticketVisible(req.user, t)) return res.status(403).json({ error: 'Forbidden' })
   const { rows: [a] } = await pool.query('SELECT id,filename,uploaded_by FROM attachments WHERE id = $1 AND ticket_id = $2', [req.params.aid, t.id])
   if (!a) return res.status(404).json({ error: 'Not found' })
-  if (!canEditTicket(req.user) && a.uploaded_by !== req.user.id) return res.status(403).json({ error: 'You can only remove your own attachments' })
+  if (!isStaff(req.user) && a.uploaded_by !== req.user.id) return res.status(403).json({ error: 'You can only remove your own attachments' })
   await pool.query('DELETE FROM attachments WHERE id = $1', [a.id])
   await addAudit(t.id, { actor: req.user.name, action: 'attachment-removed', field: 'Attachment', from: a.filename, to: null })
   res.json({ ok: true })
