@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../api.js'
 import { Modal } from '../components/Modal.jsx'
 import { useAuth, isStaff } from '../AuthContext.jsx'
+import { PRIORITY_META } from '../lib/meta.js'
 
 export default function NewTicket({ onClose, onCreated }) {
   const { user } = useAuth()
@@ -82,21 +83,22 @@ export default function NewTicket({ onClose, onCreated }) {
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="label">Priority</label>
-            <select className="input" value={form.priority} onChange={e => set('priority', e.target.value)}>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="urgent">Critical</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">Due Date</label>
-            <input type="date" className="input" value={form.due_date} onChange={e => set('due_date', e.target.value)} />
-          </div>
+        <div>
+          <label className="label">Priority</label>
+          <select className="input" value={form.priority} onChange={e => set('priority', e.target.value)}>
+            <option value="urgent">{PRIORITY_META.urgent.desc}</option>
+            <option value="high">{PRIORITY_META.high.desc}</option>
+            <option value="medium">{PRIORITY_META.medium.desc}</option>
+            <option value="low">{PRIORITY_META.low.desc}</option>
+          </select>
+          <p className="text-xs text-gray-400 mt-1">The due date is set automatically from the priority.</p>
         </div>
+        {staff && (
+          <div>
+            <label className="label">Due date <span className="font-normal text-gray-400">(optional — overrides the automatic date)</span></label>
+            <input type="date" className="input w-48" value={form.due_date} onChange={e => set('due_date', e.target.value)} />
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>

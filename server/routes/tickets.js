@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import pool, { nextTicketNum } from '../db.js'
 import { requireAuth, requireStaff } from '../auth.js'
 import { sendMail, notificationEmail } from '../email.js'
+import { dueDateFor, PRIORITIES } from '../sla.js'
 
 const r = Router()
 r.use(requireAuth)
@@ -12,6 +13,7 @@ const now = () => new Date().toISOString()
 // Every new ticket gets these subtasks (mirrors the "acknowledge the requestor" step in the Asana workflow)
 const DEFAULT_SUBTASKS = ['Send acknowledgement response to requestor']
 const MAX_FILE_BYTES = 10 * 1024 * 1024
+const AGENT_STATUSES = ['open', 'in_progress', 'resolved']
 const isStaff = u => ['admin', 'manager', 'agent'].includes(u.role)
 const canEditTicket = u => ['admin', 'manager'].includes(u.role)
 
@@ -81,6 +83,7 @@ r.get('/:id', async (req, res) => {
 r.post('/', async (req, res) => {
   const { title, description, priority, dept, category, due_date, reqName, reqEmail } = req.body || {}
   if (!title?.trim()) return res.status(400).json({ error: 'Subject is required' })
+  if (priority !== undefined && priority !== '' && !PRIORITIES.includes(priority)) return res.status(400).json({ error: 'Invalid priority' })
   const requestorSelf = !isStaff(req.user)
   const rName = requestorSelf ? req.user.name : (reqName?.trim() || req.user.name)
   const rEmail = requestorSelf ? req.user.email : (reqEmail?.trim() || req.user.email)
@@ -90,7 +93,9 @@ r.post('/', async (req, res) => {
     description: description || '', status: 'open', priority: priority || 'medium',
     dept: dept || null, category: category || null, assignee,
     requestor_id: requestorSelf ? req.user.id : null,
-    req_name: rName, req_email: rEmail, due_date: due_date || null,
+    req_name: rName, req_email: rEmail,
+    // due date follows the priority; staff may enter their own, requestors cannot
+    due_date: requestorSelf ? dueDateFor(priority || 'medium') : (due_date || dueDateFor(priority || 'medium')),
     created_at: now(), updated_at: now(), resolved_at: null,
   }
   await pool.query(
@@ -129,7 +134,19 @@ r.patch('/:id', async (req, res) => {
     return res.json(updated)
   }
 
-  if (!canEditTicket(req.user)) return res.status(403).json({ error: 'Agents cannot edit ticket fields' })
+  // Agents may only update the status (start / complete / reopen) of tickets assigned to them
+  if (!canEditTicket(req.user)) {
+    const touched = Object.keys(patch).filter(k => patch[k] !== undefined)
+    if (touched.some(k => k !== 'status')) return res.status(403).json({ error: 'Agents can only change the status of their own tickets' })
+    if (t.assignee !== req.user.id) return res.status(403).json({ error: 'You can only update tickets assigned to you' })
+    if (t.status === 'closed') return res.status(403).json({ error: 'Only a manager or admin can reopen a closed ticket' })
+    if (!AGENT_STATUSES.includes(patch.status)) return res.status(403).json({ error: 'Only a manager or admin can close a ticket' })
+  }
+
+  if (patch.priority !== undefined && patch.priority !== t.priority) {
+    if (!PRIORITIES.includes(patch.priority)) return res.status(400).json({ error: 'Invalid priority' })
+    if (patch.due_date === undefined) patch.due_date = dueDateFor(patch.priority)   // new priority => new due date
+  }
 
   const { rows: users } = await pool.query('SELECT id,name FROM users')
   const { rows: depts } = await pool.query('SELECT id,name FROM departments')

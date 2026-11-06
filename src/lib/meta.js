@@ -1,12 +1,12 @@
-// Display metadata for tickets. Edit the wording here to match your own service levels.
+// Display metadata for tickets. The hours behind each priority live in server/sla.js.
 
 export const PRIORITIES = ['urgent', 'high', 'medium', 'low']
 
 export const PRIORITY_META = {
   urgent: { label: 'Critical', pill: 'bg-red-300 text-red-950',       desc: 'Critical - Request needs to be completed within 24 hours' },
-  high:   { label: 'High',     pill: 'bg-orange-300 text-orange-950', desc: 'High - Request needs prompt attention' },
-  medium: { label: 'Medium',   pill: 'bg-yellow-300 text-yellow-950', desc: 'Medium - Standard request' },
-  low:    { label: 'Low',      pill: 'bg-sky-200 text-sky-900',       desc: 'Low - No rush' },
+  high:   { label: 'High',     pill: 'bg-orange-300 text-orange-950', desc: 'High - Request needs to be completed within 48 hours' },
+  medium: { label: 'Medium',   pill: 'bg-yellow-400 text-yellow-950', desc: 'Medium - Request needs to be completed within 72 hours' },
+  low:    { label: 'Low',      pill: 'bg-lime-300 text-lime-950',     desc: 'Low - Request can be completed more than 72 hours' },
 }
 
 export const STATUSES = ['open', 'in_progress', 'resolved', 'closed']
