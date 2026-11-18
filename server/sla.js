@@ -16,3 +16,8 @@ export function dueDateFor(priority, from = new Date()) {
   const due = new Date(from.getTime() + hours * 3600 * 1000)
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(due)
 }
+
+// Today's date ('YYYY-MM-DD') in the business time zone — used to schedule the next copy of a recurring task.
+export function todayInTz(from = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(from)
+}

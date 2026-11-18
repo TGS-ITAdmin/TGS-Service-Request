@@ -7,7 +7,12 @@
     "dev:client": "vite",
     "dev:server": "node --watch server/index.js",
     "build": "vite build",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node scripts/test.mjs",
+    "machines:docs": "node scripts/machines-docs.mjs",
+    "machines:check": "node scripts/machines-docs.mjs --check",
+    "test:api": "node scripts/api-projects.mjs",
+    "check": "npm test && npm run machines:check"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.2.1",

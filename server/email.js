@@ -79,3 +79,13 @@ export function notificationEmail(title, body, ticketNum) {
       <p style="color:#64748b;font-size:13px">Log in to HelpDesk to reply.</p>
     </div>`
 }
+
+export function taskNotificationEmail(title, body, projectName) {
+  return `
+    <div style="font-family:sans-serif;max-width:480px;margin:auto">
+      <h2>📋 HelpDesk — ${esc(projectName || 'Project task')}</h2>
+      <h3>${esc(title)}</h3>
+      <p style="background:#f8fafc;padding:12px;border-radius:8px;white-space:pre-wrap">${esc(body)}</p>
+      <p style="color:#64748b;font-size:13px">Log in to HelpDesk to open the task.</p>
+    </div>`
+}

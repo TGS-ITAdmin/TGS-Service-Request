@@ -7,9 +7,12 @@ import authRouter from './routes/auth.js'
 import ticketsRouter from './routes/tickets.js'
 import usersRouter from './routes/users.js'
 import departmentsRouter from './routes/departments.js'
+import projectsRouter from './routes/projects.js'
+import tasksRouter from './routes/tasks.js'
 import { sentEmails } from './email.js'
 import { requireAuth, requireAdmin } from './auth.js'
 import { initDb } from './db.js'
+import { describeAll } from '../shared/index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -25,8 +28,13 @@ app.use('/api/auth', authRouter)
 app.use('/api/tickets', ticketsRouter)
 app.use('/api/users', usersRouter)
 app.use('/api/departments', departmentsRouter)
+app.use('/api/projects', projectsRouter)
+app.use('/api/tasks', tasksRouter)
 
 // Sent-email log (testing aid — Ethereal preview links)
+// Machine-readable description of every lifecycle (ticket status, account, session) and the role policy.
+app.get('/api/machines', requireAuth, (req, res) => res.json(describeAll()))
+
 app.get('/api/emails', requireAuth, requireAdmin, (req, res) => res.json(sentEmails))
 
 // Serve the built React SPA (npm run build → dist/)

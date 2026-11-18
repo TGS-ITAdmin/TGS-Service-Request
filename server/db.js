@@ -117,6 +117,125 @@ CREATE TABLE IF NOT EXISTS attachments (
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS attachments_ticket_idx ON attachments(ticket_id);
+
+-- ---------- Projects ----------
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  color TEXT NOT NULL DEFAULT '#3b82f6',
+  privacy TEXT NOT NULL DEFAULT 'members',
+  archived BOOLEAN NOT NULL DEFAULT false,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS sections (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  position DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS sections_project_idx ON sections(project_id);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  assignee TEXT,
+  due_date TEXT,
+  priority TEXT,
+  completed BOOLEAN NOT NULL DEFAULT false,
+  completed_at TIMESTAMPTZ,
+  recurrence JSONB,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+-- A project item is a task OR a form ticket placed in a project (multi-homing: the same one can be in many projects)
+CREATE TABLE IF NOT EXISTS project_items (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  section_id TEXT REFERENCES sections(id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+  ticket_id TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+  position DOUBLE PRECISION NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((task_id IS NOT NULL)::int + (ticket_id IS NOT NULL)::int = 1)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS project_items_task_uq ON project_items(project_id, task_id) WHERE task_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS project_items_ticket_uq ON project_items(project_id, ticket_id) WHERE ticket_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS project_items_task_idx ON project_items(task_id);
+CREATE INDEX IF NOT EXISTS project_items_ticket_idx ON project_items(ticket_id);
+CREATE TABLE IF NOT EXISTS task_deps (
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  blocked_by TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  PRIMARY KEY (task_id, blocked_by),
+  CHECK (task_id <> blocked_by)
+);
+CREATE TABLE IF NOT EXISTS task_subtasks (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  done BOOLEAN NOT NULL DEFAULT false,
+  assignee TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  done_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS task_subtasks_idx ON task_subtasks(task_id);
+CREATE TABLE IF NOT EXISTS task_messages (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  sender_id TEXT,
+  sender_name TEXT,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS task_messages_idx ON task_messages(task_id);
+CREATE TABLE IF NOT EXISTS task_audit (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  actor TEXT,
+  action TEXT,
+  field TEXT,
+  "from" TEXT,
+  "to" TEXT,
+  ts TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS task_audit_idx ON task_audit(task_id);
+CREATE TABLE IF NOT EXISTS task_attachments (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+  size INTEGER NOT NULL,
+  data BYTEA NOT NULL,
+  uploaded_by TEXT,
+  uploaded_by_name TEXT,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS task_attachments_idx ON task_attachments(task_id);
+CREATE TABLE IF NOT EXISTS custom_fields (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  options JSONB NOT NULL DEFAULT '[]',
+  position DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS custom_fields_project_idx ON custom_fields(project_id);
+CREATE TABLE IF NOT EXISTS custom_values (
+  field_id TEXT NOT NULL REFERENCES custom_fields(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+  value TEXT NOT NULL,
+  PRIMARY KEY (field_id, item_id)
+);
 `
 
 export async function initDb() {

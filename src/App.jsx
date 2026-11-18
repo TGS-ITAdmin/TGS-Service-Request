@@ -3,15 +3,17 @@ import Dashboard from './pages/Dashboard.jsx'
 import TicketsWorkspace from './pages/TicketsWorkspace.jsx'
 import NewTicket from './pages/NewTicket.jsx'
 import PeopleSettings from './pages/PeopleSettings.jsx'
+import Projects from './pages/Projects.jsx'
 import Login from './pages/Login.jsx'
 import ChangePassword from './pages/ChangePassword.jsx'
 import { AuthProvider, useAuth, isStaff, isAdmin } from './AuthContext.jsx'
 import { Avatar } from './components/Badge.jsx'
 
 function Shell() {
-  const { user, checking, logout } = useAuth()
+  const { user, checking, unreachable, retry, logout } = useAuth()
   const [page, setPage] = useState('dashboard')
   const [selectedTicket, setSelectedTicket] = useState(null)
+  const [selectedProject, setSelectedProject] = useState(null)
   const [showNew, setShowNew] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [showPassword, setShowPassword] = useState(false)
@@ -28,13 +30,25 @@ function Shell() {
   if (checking) {
     return <div className="flex items-center justify-center h-screen text-gray-400">Loading…</div>
   }
+  if (unreachable) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+        <div className="card p-8 max-w-sm text-center">
+          <div className="text-4xl mb-2">📡</div>
+          <div className="font-semibold text-gray-900">Can't reach the server</div>
+          <p className="text-sm text-gray-500 mt-1">You're still signed in. Check your connection, then try again.</p>
+          <button className="btn-primary mt-5 mx-auto" onClick={retry}>Retry</button>
+        </div>
+      </div>
+    )
+  }
   if (!user) return <Login />
   if (user.must_change_password) return <ChangePassword forced />
 
   const NAV = [
     { id: 'dashboard', label: 'Dashboard', icon: '▦' },
     { id: 'tickets', label: 'Tickets', icon: '🎫' },
-    ...(isStaff(user) ? [{ id: 'people', label: 'People', icon: '👥' }] : []),
+    ...(isStaff(user) ? [{ id: 'projects', label: 'Projects', icon: '📋' }, { id: 'people', label: 'People', icon: '👥' }] : []),
   ]
 
   return (
@@ -55,7 +69,7 @@ function Shell() {
           {NAV.map(n => (
             <button
               key={n.id}
-              onClick={() => { setPage(n.id); if (n.id !== 'tickets') setSelectedTicket(null) }}
+              onClick={() => { setPage(n.id); if (n.id !== 'tickets') setSelectedTicket(null); if (n.id === 'projects') setSelectedProject(null) }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 page === n.id
                   ? 'bg-blue-600 text-white'
@@ -101,6 +115,7 @@ function Shell() {
             refreshKey={refreshKey}
           />
         )}
+        {page === 'projects' && isStaff(user) && <Projects openId={selectedProject} onOpen={setSelectedProject} />}
         {page === 'people' && isStaff(user) && <PeopleSettings />}
       </main>
 
@@ -110,10 +125,17 @@ function Shell() {
   )
 }
 
+// Keyed by who is signed in: signing out and back in as someone else starts from a clean Dashboard,
+// instead of inheriting the previous person's page, open ticket and dialogs.
+function Root() {
+  const { user } = useAuth()
+  return <Shell key={user?.id ?? 'anonymous'} />
+}
+
 export default function App() {
   return (
     <AuthProvider>
-      <Shell />
+      <Root />
     </AuthProvider>
   )
 }

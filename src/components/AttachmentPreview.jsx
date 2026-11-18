@@ -1,25 +1,27 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api.js'
+import { notifyError } from '../lib/errors.js'
 import { previewInfo, fmtSize } from '../lib/meta.js'
 import { IconClose, IconDownload, IconFile } from './Icons.jsx'
 
 const MAX_TEXT_CHARS = 200000
 
 // Saves a file to the user's computer (only ever called from an explicit Download click).
-export async function saveAttachment(ticketId, a) {
+// `scope` is which kind of record owns the file: 'tickets' (default) or 'tasks'.
+export async function saveAttachment(ticketId, a, scope = 'tickets') {
   try {
-    const blob = await api.tickets.downloadAttachment(ticketId, a.id)
+    const blob = await api[scope].downloadAttachment(ticketId, a.id)
     const url = URL.createObjectURL(blob)
     const el = document.createElement('a')
     el.href = url; el.download = a.filename
     document.body.appendChild(el); el.click(); el.remove()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
-  } catch (e) { alert(e.message) }
+  } catch (e) { notifyError(e) }
 }
 
 // Full-screen viewer for a ticket's attachments. Click a file to open it here instead of downloading it.
-export default function AttachmentPreview({ ticketId, items, startId, onClose }) {
+export default function AttachmentPreview({ ticketId, items, startId, onClose, scope = 'tickets' }) {
   const [currentId, setCurrentId] = useState(startId)
   const [view, setView] = useState({ status: 'loading' })
   const idx = items.findIndex(x => x.id === currentId)
@@ -51,7 +53,7 @@ export default function AttachmentPreview({ ticketId, items, startId, onClose })
     const info = previewInfo(a)
     setView({ status: info.kind === 'none' ? 'none' : 'loading' })
     if (info.kind === 'none') return undefined
-    api.tickets.downloadAttachment(ticketId, a.id).then(async (blob) => {
+    api[scope].downloadAttachment(ticketId, a.id).then(async (blob) => {
       if (cancelled) return
       const typed = new Blob([blob], { type: info.mime })      // we choose the type; never trust what the upload claimed
       if (info.kind === 'text') {
@@ -63,7 +65,7 @@ export default function AttachmentPreview({ ticketId, items, startId, onClose })
       }
     }).catch((e) => { if (!cancelled) setView({ status: 'error', error: e.message }) })
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url) }
-  }, [ticketId, a?.id])    // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ticketId, scope, a?.id])    // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!a) return null
   const stop = (e) => e.stopPropagation()
@@ -77,7 +79,7 @@ export default function AttachmentPreview({ ticketId, items, startId, onClose })
         <div className="mx-auto w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 mb-3"><IconFile width={26} height={26} /></div>
         <div className="font-medium text-gray-900 break-words">{a.filename}</div>
         <p className="text-sm text-gray-500 mt-1">Preview isn't available for this file type.</p>
-        <button className="btn-primary mt-4 mx-auto" onClick={() => saveAttachment(ticketId, a)}><IconDownload /> Download</button>
+        <button className="btn-primary mt-4 mx-auto" onClick={() => saveAttachment(ticketId, a, scope)}><IconDownload /> Download</button>
       </div>
     )
   }
@@ -102,7 +104,7 @@ export default function AttachmentPreview({ ticketId, items, startId, onClose })
             {fmtSize(a.size)} · {a.uploaded_by_name}{items.length > 1 ? ` · ${idx + 1} of ${items.length}` : ''}
           </div>
         </div>
-        <button onClick={() => saveAttachment(ticketId, a)} className="inline-flex items-center gap-1.5 rounded-md bg-white/15 hover:bg-white/25 px-3 py-1.5 text-sm" aria-label="Download file">
+        <button onClick={() => saveAttachment(ticketId, a, scope)} className="inline-flex items-center gap-1.5 rounded-md bg-white/15 hover:bg-white/25 px-3 py-1.5 text-sm" aria-label="Download file">
           <IconDownload /> Download
         </button>
         <button onClick={onClose} aria-label="Close preview" title="Close (Esc)" className="rounded-md hover:bg-white/20 p-1.5"><IconClose width={20} height={20} /></button>
