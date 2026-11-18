@@ -1,3 +1,5 @@
+import { ticketStatus, STATUS_IDS, isDone as machineIsDone } from '../../shared/ticketStatus.js'
+
 // Display metadata for tickets. The hours behind each priority live in server/sla.js.
 
 export const PRIORITIES = ['urgent', 'high', 'medium', 'low']
@@ -9,14 +11,16 @@ export const PRIORITY_META = {
   low:    { label: 'Low',      pill: 'bg-lime-300 text-lime-950',     desc: 'Low - Request can be completed more than 72 hours' },
 }
 
-export const STATUSES = ['open', 'in_progress', 'resolved', 'closed']
-export const STATUS_META = {
-  open:        { label: 'Open',        dot: 'bg-blue-500' },
-  in_progress: { label: 'In progress', dot: 'bg-yellow-500' },
-  resolved:    { label: 'Resolved',    dot: 'bg-green-500' },
-  closed:      { label: 'Closed',      dot: 'bg-gray-400' },
+// Status ids, labels and "done" come from the machine in shared/ticketStatus.js. Only the colours live here.
+export const STATUSES = STATUS_IDS
+const STATUS_STYLE = {
+  open:        { dot: 'bg-blue-500',   pill: 'bg-blue-100 text-blue-700' },
+  in_progress: { dot: 'bg-yellow-500', pill: 'bg-yellow-100 text-yellow-700' },
+  resolved:    { dot: 'bg-green-500',  pill: 'bg-green-100 text-green-700' },
+  closed:      { dot: 'bg-gray-400',   pill: 'bg-green-100 text-green-700' },
 }
-export const isDone = (status) => status === 'resolved' || status === 'closed'
+export const STATUS_META = Object.fromEntries(STATUS_IDS.map(id => [id, { label: ticketStatus.states[id].label, ...STATUS_STYLE[id] }]))
+export const isDone = machineIsDone
 
 // ---- dates ----
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
