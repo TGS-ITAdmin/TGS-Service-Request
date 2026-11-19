@@ -1,18 +1,20 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import { api } from '../api.js'
 import { notifyError } from '../lib/errors.js'
+import { StarButton } from '../components/StarButton.jsx'
 import ProjectView from './ProjectView.jsx'
 import { NewProjectDialog } from '../components/ProjectDialogs.jsx'
 import { PRIVACY_LABEL } from '../../shared/projects.js'
 
-function ProjectCard({ p, onOpen }) {
+function ProjectCard({ p, onOpen, onStar }) {
   const pct = p.item_total ? Math.round((p.item_done / p.item_total) * 100) : 0
   return (
-    <button onClick={onOpen} className="card p-4 text-left hover:shadow-md transition-shadow w-full" aria-label={`Open project ${p.name}`}>
+    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={e => e.key === 'Enter' && onOpen()} className="card p-4 text-left hover:shadow-md transition-shadow w-full cursor-pointer" aria-label={`Open project ${p.name}`}>
       <div className="flex items-center gap-2">
         <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: p.color }} />
         <span className="font-semibold text-gray-900 truncate">{p.name}</span>
         {p.archived && <span className="text-[11px] bg-gray-200 text-gray-600 rounded px-1.5">Archived</span>}
+        <span className="ml-auto"><StarButton on={p.is_favorite} name={p.name} onToggle={onStar} /></span>
       </div>
       {p.description && <p className="text-sm text-gray-500 mt-1 line-clamp-2">{p.description}</p>}
       <div className="mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden"><div className="h-full" style={{ width: `${pct}%`, background: p.color }} /></div>
@@ -20,17 +22,15 @@ function ProjectCard({ p, onOpen }) {
         <span>{p.item_done} of {p.item_total} complete</span>
         <span>{p.member_count} member{p.member_count === 1 ? '' : 's'} · {PRIVACY_LABEL[p.privacy]}</span>
       </div>
-    </button>
+    </div>
   )
 }
 
-export default function Projects({ openId, onOpen }) {
-  const [projects, setProjects] = useState(null)
+// `projects` (null while loading) and `load` come from the app shell, which also feeds the sidebar shortcuts.
+export default function Projects({ openId, onOpen, projects, load }) {
   const [showNew, setShowNew] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
-
-  const load = useCallback(() => api.projects.list().then(setProjects).catch(e => { notifyError(e); setProjects([]) }), [])
-  useEffect(() => { load() }, [load])
+  const star = async (p) => { try { await api.projects.setFavorite(p.id, !p.is_favorite); load() } catch (e) { notifyError(e) } }
 
   if (openId) return <ProjectView projectId={openId} onBack={() => { onOpen(null); load() }} onDeleted={() => { onOpen(null); load() }} onProjectsChanged={load} />
 
@@ -51,11 +51,11 @@ export default function Projects({ openId, onOpen }) {
             <button className="btn-primary mx-auto mt-4" onClick={() => setShowNew(true)}>Create your first project</button>
           </div>
         )}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{active.map(p => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} />)}</div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{active.map(p => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} onStar={() => star(p)} />)}</div>
         {archived.length > 0 && (
           <div className="mt-8">
             <button className="text-sm text-gray-500 hover:text-gray-800" onClick={() => setShowArchived(s => !s)}>{showArchived ? '▾' : '▸'} Archived ({archived.length})</button>
-            {showArchived && <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mt-3">{archived.map(p => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} />)}</div>}
+            {showArchived && <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mt-3">{archived.map(p => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} onStar={() => star(p)} />)}</div>}
           </div>
         )}
       </div>

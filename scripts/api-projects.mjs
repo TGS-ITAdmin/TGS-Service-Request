@@ -61,6 +61,15 @@ async function main() {
   assert.equal((await call(alice.token, 'DELETE', `/projects/${p.id}/members/${alice.user.id}`)).status, 409); ok('last owner cannot leave')
   assert.equal((await call(alice.token, 'PATCH', `/projects/${p.id}`, { privacy: 'staff' })).status, 200)
 
+  // ---- favorites (per user)
+  assert.equal((await call(bob.token, 'PUT', `/projects/${p.id}/favorite`)).status, 200)
+  assert.equal((await call(bob.token, 'GET', '/projects')).body.find(x => x.id === p.id).is_favorite, true)
+  assert.equal((await call(alice.token, 'GET', '/projects')).body.find(x => x.id === p.id).is_favorite, false); ok('starring is per user')
+  assert.equal((await call(bob.token, 'GET', `/projects/${p.id}`)).body.is_favorite, true)
+  assert.equal((await call(bob.token, 'DELETE', `/projects/${p.id}/favorite`)).status, 200)
+  assert.equal((await call(bob.token, 'GET', '/projects')).body.find(x => x.id === p.id).is_favorite, false); ok('un-star')
+  assert.equal((await call(alice.token, 'GET', '/projects')).body.find(x => x.id === p.id).my_role, 'owner')
+
   // ---- sections + tasks
   const [todo, doing, done] = d.sections
   const t1 = (await call(alice.token, 'POST', `/projects/${p.id}/tasks`, { title: 'Pack boxes', assignee: bob.user.id, due_date: '2026-12-01', priority: 'high' })).body

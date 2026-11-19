@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { api } from './api.js'
 import Dashboard from './pages/Dashboard.jsx'
 import TicketsWorkspace from './pages/TicketsWorkspace.jsx'
 import NewTicket from './pages/NewTicket.jsx'
@@ -19,6 +20,13 @@ function Shell() {
   const [showPassword, setShowPassword] = useState(false)
 
   const refresh = () => setRefreshKey(k => k + 1)
+
+  // Projects feed both the Projects page and the sidebar shortcuts (null = still loading / not staff)
+  const [projects, setProjects] = useState(null)
+  const staff = isStaff(user)
+  const loadProjects = useCallback(() => staff ? api.projects.list().then(setProjects).catch(() => setProjects(p => p ?? [])) : Promise.resolve(), [staff])
+  useEffect(() => { loadProjects() }, [loadProjects])
+  const openProject = (id) => { setSelectedProject(id); setSelectedTicket(null); setPage('projects') }
 
   const handleNewCreated = (ticket) => {
     setShowNew(false)
@@ -65,7 +73,7 @@ function Shell() {
           </div>
         </div>
 
-        <div className="flex-1 px-3 py-4 space-y-1">
+        <div className="flex-1 px-3 py-4 space-y-1 overflow-y-auto min-h-0">
           {NAV.map(n => (
             <button
               key={n.id}
@@ -80,6 +88,24 @@ function Shell() {
               {n.label}
             </button>
           ))}
+
+          {staff && projects && (() => {
+            const live = projects.filter(p => !p.archived)
+            const groups = [['Starred', live.filter(p => p.is_favorite), '★'], ['My projects', live.filter(p => p.my_role), null]]
+            return groups.filter(([, list]) => list.length).map(([title, list, mark]) => (
+              <div key={title} className="pt-4" data-testid={`sidebar-${title}`}>
+                <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{title}</div>
+                {list.map(p => (
+                  <button key={p.id} onClick={() => openProject(p.id)} title={p.name} aria-label={`${title}: ${p.name}`}
+                    className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-sm transition-all ${page === 'projects' && selectedProject === p.id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                    <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: p.color }} />
+                    <span className="truncate flex-1 text-left">{p.name}</span>
+                    {mark && <span className="text-amber-400 text-xs">{mark}</span>}
+                  </button>
+                ))}
+              </div>
+            ))
+          })()}
         </div>
 
         <div className="px-3 py-4 border-t border-slate-800">
@@ -115,7 +141,7 @@ function Shell() {
             refreshKey={refreshKey}
           />
         )}
-        {page === 'projects' && isStaff(user) && <Projects openId={selectedProject} onOpen={setSelectedProject} />}
+        {page === 'projects' && isStaff(user) && <Projects openId={selectedProject} onOpen={setSelectedProject} projects={projects} load={loadProjects} />}
         {page === 'people' && isStaff(user) && <PeopleSettings />}
       </main>
 

@@ -7,6 +7,7 @@ import TicketPanel from '../components/TicketPanel.jsx'
 import { MembersDialog, SettingsDialog, AddTicketDialog } from '../components/ProjectDialogs.jsx'
 import { CompleteCircle, CircleIcon, IconList, IconBoard, IconPlus, IconSubtask, IconClip, IconComment } from '../components/Icons.jsx'
 import { useAuth } from '../AuthContext.jsx'
+import { StarButton } from '../components/StarButton.jsx'
 import { PRIORITY_META, formatDue, DUE_TONE } from '../lib/meta.js'
 import { itemsIn, positionFor, applyMove, progress, fieldDisplay, filterItems } from '../lib/projects.js'
 import { PRIVACY_LABEL, canManageProject } from '../../shared/projects.js'
@@ -220,6 +221,7 @@ export default function ProjectView({ projectId, onBack, onDeleted, onProjectsCh
             <button onClick={onBack} className="text-sm text-gray-500 hover:text-gray-900" aria-label="Back to projects">← Projects</button>
             <span className="w-3 h-3 rounded-sm" style={{ background: project.color }} />
             <h1 className="text-xl font-semibold truncate">{project.name}</h1>
+            <StarButton on={data.is_favorite} name={project.name} onToggle={async () => { try { await api.projects.setFavorite(project.id, !data.is_favorite); changed() } catch (e) { notifyError(e) } }} />
             {project.archived && <span className="text-xs bg-gray-200 text-gray-600 rounded px-2 py-0.5">Archived</span>}
             <span className="text-xs text-gray-400 hidden md:inline">{PRIVACY_LABEL[project.privacy]}</span>
             <div className="ml-auto flex items-center gap-2">

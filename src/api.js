@@ -79,6 +79,7 @@ export const api = {
     create: (data) => req('POST', '/projects', data),
     update: (id, data) => req('PATCH', `/projects/${id}`, data),
     delete: (id) => req('DELETE', `/projects/${id}`),
+    setFavorite: (id, on) => req(on ? 'PUT' : 'DELETE', `/projects/${id}/favorite`),
     addMember: (id, data) => req('POST', `/projects/${id}/members`, data),
     setMemberRole: (id, uid, role) => req('PATCH', `/projects/${id}/members/${uid}`, { role }),
     removeMember: (id, uid) => req('DELETE', `/projects/${id}/members/${uid}`),

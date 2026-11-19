@@ -35,6 +35,7 @@ r.get('/', async (req, res) => {
   const admin = isAdminRole(req.user.role)
   const { rows } = await pool.query(
     `SELECT p.*, pm.role AS my_role,
+       EXISTS (SELECT 1 FROM project_favorites f WHERE f.project_id = p.id AND f.user_id = $1) AS is_favorite,
        (SELECT COUNT(*)::int FROM project_members m WHERE m.project_id = p.id) AS member_count,
        (SELECT COUNT(*)::int FROM project_items i WHERE i.project_id = p.id) AS item_total,
        (SELECT COUNT(*)::int FROM project_items i
@@ -99,7 +100,20 @@ r.get('/:id', async (req, res) => {
     ...taskRows.rows.map(t => ({ kind: 'task', ...t, done: t.completed, blocked: t.blocked_by_open > 0, values: byItem[t.item_id] || {} })),
     ...ticketRows.rows.map(k => ({ kind: 'ticket', ...k, done: isDone(k.status), values: byItem[k.item_id] || {} })),
   ].sort((a, b) => a.position - b.position)
-  res.json({ project, my_role: member, members: members.rows, sections: sections.rows, fields: fields.rows, items })
+  const { rows: [fav] } = await pool.query('SELECT 1 FROM project_favorites WHERE user_id=$1 AND project_id=$2', [req.user.id, pid])
+  res.json({ project, my_role: member, is_favorite: !!fav, members: members.rows, sections: sections.rows, fields: fields.rows, items })
+})
+
+// PUT /api/projects/:id/favorite — star it for the caller only; DELETE un-stars. Anyone who can see the project may star it.
+r.put('/:id/favorite', async (req, res) => {
+  const ctx = await loadProject(req, res); if (!ctx) return
+  await pool.query('INSERT INTO project_favorites (user_id,project_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [req.user.id, ctx.project.id])
+  res.json({ ok: true, is_favorite: true })
+})
+r.delete('/:id/favorite', async (req, res) => {
+  const ctx = await loadProject(req, res); if (!ctx) return
+  await pool.query('DELETE FROM project_favorites WHERE user_id=$1 AND project_id=$2', [req.user.id, ctx.project.id])
+  res.json({ ok: true, is_favorite: false })
 })
 
 // PATCH /api/projects/:id — { name?, description?, color?, privacy?, archived? }

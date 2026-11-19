@@ -137,6 +137,12 @@ CREATE TABLE IF NOT EXISTS project_members (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS project_favorites (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, project_id)
+);
 CREATE TABLE IF NOT EXISTS sections (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
