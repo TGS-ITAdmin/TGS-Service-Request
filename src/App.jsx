@@ -5,6 +5,7 @@ import TicketsWorkspace from './pages/TicketsWorkspace.jsx'
 import NewTicket from './pages/NewTicket.jsx'
 import PeopleSettings from './pages/PeopleSettings.jsx'
 import Projects from './pages/Projects.jsx'
+import MyTasks from './pages/MyTasks.jsx'
 import Login from './pages/Login.jsx'
 import ChangePassword from './pages/ChangePassword.jsx'
 import { AuthProvider, useAuth, isStaff, isAdmin } from './AuthContext.jsx'
@@ -56,7 +57,7 @@ function Shell() {
   const NAV = [
     { id: 'dashboard', label: 'Dashboard', icon: '▦' },
     { id: 'tickets', label: 'Tickets', icon: '🎫' },
-    ...(isStaff(user) ? [{ id: 'projects', label: 'Projects', icon: '📋' }, { id: 'people', label: 'People', icon: '👥' }] : []),
+    ...(isStaff(user) ? [{ id: 'mytasks', label: 'My tasks', icon: '✅' }, { id: 'projects', label: 'Projects', icon: '📋' }, { id: 'people', label: 'People', icon: '👥' }] : []),
   ]
 
   return (
@@ -141,6 +142,7 @@ function Shell() {
             refreshKey={refreshKey}
           />
         )}
+        {page === 'mytasks' && isStaff(user) && <MyTasks onProjectsChanged={loadProjects} />}
         {page === 'projects' && isStaff(user) && <Projects openId={selectedProject} onOpen={setSelectedProject} projects={projects} load={loadProjects} />}
         {page === 'people' && isStaff(user) && <PeopleSettings />}
       </main>

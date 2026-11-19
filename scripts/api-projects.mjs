@@ -165,6 +165,21 @@ async function main() {
   assert.ok(d.items.every(i => d.sections.some(s => s.id === i.section_id))); ok('deleting a section moves its items')
 
   await call(alice.token, 'POST', `/tasks/${t1.task_id}/projects`, { project_id: p2.id })   // t1 lives in two projects again
+  // ---- my tasks
+  await call(alice.token, 'PATCH', `/tasks/${t1.task_id}`, { assignee: bob.user.id })
+  await call(alice.token, 'PATCH', `/tickets/${tk.id}`, { assignee: bob.user.id, status: 'open' })
+  const mine = (await call(bob.token, 'GET', '/tasks/mine')).body
+  assert.ok(mine.some(i => i.kind === 'task' && i.id === t1.task_id && i.projects.length === 2)); ok('my tasks lists assigned tasks with their projects')
+  const mt = mine.find(i => i.kind === 'ticket' && i.id === tk.id)
+  assert.ok(mt && mt.num === tk.num && mt.projects.length === 2); ok('my tasks lists assigned tickets with their projects')
+  assert.equal((await call(alice.token, 'GET', '/tasks/mine')).body.some(i => i.id === t1.task_id), false); ok('my tasks only shows my own')
+  assert.equal((await call(rita.token, 'GET', '/tasks/mine')).status, 403); ok('requestors cannot use my tasks')
+  const hidden = (await call(bob.token, 'POST', '/projects', { name: 'Bob only', privacy: 'members' })).body
+  const ht = (await call(bob.token, 'POST', `/projects/${hidden.id}/tasks`, { title: 'Secret', assignee: bob.user.id })).body
+  assert.ok((await call(bob.token, 'GET', '/tasks/mine')).body.some(i => i.id === ht.task_id))
+  await call(bob.token, 'PATCH', `/projects/${hidden.id}`, { archived: true })
+  assert.equal((await call(bob.token, 'GET', '/tasks/mine')).body.some(i => i.id === ht.task_id), false); ok('tasks only in an archived project are hidden')
+
   // delete project: ticket survives, project-only tasks go
   assert.equal((await call(alice.token, 'DELETE', `/projects/${p.id}`)).status, 200)
   assert.equal((await call(alice.token, 'GET', `/tasks/${t2.task_id}`)).status, 404)

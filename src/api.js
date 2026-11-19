@@ -96,6 +96,7 @@ export const api = {
     setFieldValue: (id, itemId, fid, value) => req('PUT', `/projects/${id}/items/${itemId}/fields/${fid}`, { value }),
   },
   tasks: {
+    mine: () => req('GET', '/tasks/mine'),
     get: (id) => req('GET', `/tasks/${id}`),
     update: (id, data) => req('PATCH', `/tasks/${id}`, data),
     delete: (id) => req('DELETE', `/tasks/${id}`),

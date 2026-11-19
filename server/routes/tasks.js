@@ -5,7 +5,8 @@ import pool from '../db.js'
 import { requireAuth, requireStaff } from '../auth.js'
 import { PRIORITIES, todayInTz } from '../sla.js'
 import { sendMail, taskNotificationEmail } from '../email.js'
-import { isStaffRole } from '../../shared/roles.js'
+import { isStaffRole, isAdminRole } from '../../shared/roles.js'
+import { isDone } from '../../shared/ticketStatus.js'
 import { taskState, taskStateOf } from '../../shared/taskState.js'
 import { createsCycle, normalizeRecurrence, nextDueDate, canViewProject } from '../../shared/projects.js'
 import { accessibleProjectIdsForTask, memberRole, now } from '../projectAccess.js'
@@ -38,6 +39,35 @@ async function staffOnly(id) {
 
 const unfinishedBlockers = async (taskId, db = pool) =>
   (await db.query(`SELECT t.id,t.title FROM task_deps d JOIN tasks t ON t.id = d.blocked_by WHERE d.task_id=$1 AND NOT t.completed ORDER BY t.title`, [taskId])).rows
+
+// GET /api/tasks/mine — everything assigned to the caller: project tasks AND tickets, with the projects each one is in.
+// Only projects the caller may see are listed (archived ones are hidden; a task living only there is hidden too).
+// Finished items are limited to the last 60 days so the list stays useful.
+r.get('/mine', async (req, res) => {
+  const admin = isAdminRole(req.user.role)
+  const visible = `NOT p.archived AND ($2::boolean OR p.privacy = 'staff' OR pm.user_id IS NOT NULL)`
+  const projectsOf = (col) => `(SELECT COALESCE(json_agg(json_build_object('id',p.id,'name',p.name,'color',p.color,'item_id',i.id) ORDER BY lower(p.name)), '[]'::json)
+      FROM project_items i JOIN projects p ON p.id = i.project_id LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
+     WHERE i.${col} = %ID% AND ${visible})`
+  const tasks = await pool.query(
+    `SELECT t.id, t.title, t.due_date, t.priority, t.completed, t.completed_at, t.recurrence,
+        (SELECT COUNT(*)::int FROM task_subtasks s WHERE s.task_id = t.id) AS subtask_total,
+        (SELECT COUNT(*)::int FROM task_subtasks s WHERE s.task_id = t.id AND s.done) AS subtask_done,
+        (SELECT COUNT(*)::int FROM task_deps d JOIN tasks b ON b.id = d.blocked_by WHERE d.task_id = t.id AND NOT b.completed) AS blocked_by_open,
+        ${projectsOf('task_id').replace('%ID%', 't.id')} AS projects
+       FROM tasks t
+      WHERE t.assignee = $1 AND (NOT t.completed OR t.completed_at > now() - interval '60 days')`, [req.user.id, admin])
+  const tickets = await pool.query(
+    `SELECT k.id, k.num, k.title, k.due_date, k.priority, k.status,
+        ${projectsOf('ticket_id').replace('%ID%', 'k.id')} AS projects
+       FROM tickets k
+      WHERE k.assignee = $1 AND (k.status IN ('open','in_progress') OR k.resolved_at > now() - interval '60 days')`, [req.user.id, admin])
+  const items = [
+    ...tasks.rows.filter(t => t.projects.length).map(t => ({ kind: 'task', ...t, done: t.completed, blocked: t.blocked_by_open > 0 })),
+    ...tickets.rows.map(k => ({ kind: 'ticket', ...k, done: isDone(k.status) })),
+  ]
+  res.json(items)
+})
 
 // GET /api/tasks/:id
 r.get('/:id', async (req, res) => {

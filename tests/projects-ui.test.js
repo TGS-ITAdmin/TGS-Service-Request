@@ -54,3 +54,32 @@ test('filterItems: text, ticket number, assignee, hide done', () => {
   assert.deepEqual(filterItems(items, { hideDone: true }).map(i => i.item_id), ['a', 'c'])
   assert.equal(filterItems(items).length, 3)
 })
+
+import { bucketOf, groupMyTasks } from '../src/lib/myTasks.js'
+
+test('My tasks buckets: overdue, today, upcoming, no date, completed', () => {
+  const today = '2026-11-20'
+  assert.equal(bucketOf({ due_date: '2026-11-19' }, today), 'overdue')
+  assert.equal(bucketOf({ due_date: '2026-11-20' }, today), 'today')
+  assert.equal(bucketOf({ due_date: '2026-11-21' }, today), 'upcoming')
+  assert.equal(bucketOf({ due_date: null }, today), 'nodate')
+  assert.equal(bucketOf({ due_date: '2026-01-01', done: true }, today), 'done')   // done wins over overdue
+})
+
+test('groupMyTasks: ordered groups, empty ones dropped, sorted by due then priority, filters work', () => {
+  const today = '2026-11-20'
+  const P = [{ id: 'p', name: 'Office Move', color: '#000' }]
+  const items = [
+    { kind: 'task', id: 'a', title: 'B task', due_date: '2026-11-25', priority: 'low', projects: P },
+    { kind: 'ticket', id: 'b', num: 1007, title: 'Printer', due_date: '2026-11-25', priority: 'urgent', projects: [] },
+    { kind: 'task', id: 'c', title: 'Late', due_date: '2026-11-01', priority: null, projects: P },
+    { kind: 'task', id: 'd', title: 'Done one', due_date: null, done: true, projects: P },
+  ]
+  const g = groupMyTasks(items, today)
+  assert.deepEqual(g.map(x => x.id), ['overdue', 'upcoming', 'done'])
+  assert.deepEqual(g[1].items.map(i => i.id), ['b', 'a'])                           // same day: urgent first
+  assert.deepEqual(groupMyTasks(items, today, { kind: 'ticket' }).flatMap(x => x.items.map(i => i.id)), ['b'])
+  assert.deepEqual(groupMyTasks(items, today, { q: '#1007' }).flatMap(x => x.items.map(i => i.id)), ['b'])
+  assert.deepEqual(groupMyTasks(items, today, { q: 'office' }).flatMap(x => x.items.map(i => i.id)).sort(), ['a', 'c', 'd'])
+  assert.deepEqual(groupMyTasks([], today), [])
+})
