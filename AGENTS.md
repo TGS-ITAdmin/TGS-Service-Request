@@ -33,7 +33,7 @@ npm run machines:docs    # regenerate the diagrams after editing shared/
 4. **API errors** are `{ error: "human text", code?: "machine_code", allowed?: [...] }`. In the UI show them with
    `notifyError(e)` (`src/lib/errors.js`) — it stays quiet when the session just ended.
 5. **Permissions are enforced on the server.** The UI only mirrors them to hide buttons. Routes use `requireAuth`,
-   `requireStaff`, `requireManageAccounts`, `requirePerm('departments'|'ratings')`; row-level rules (own tickets only, internal notes staff-only) live in the route.
+   `requireStaff`, `requireManageAccounts`, `requirePerm('departments'|'ratings')`; ticket scope via `inTicketScope`/`ticketVisible`; row-level rules (own tickets only, internal notes staff-only) live in the route.
 6. **Schema changes** go in `server/db.js` as idempotent statements (`CREATE TABLE IF NOT EXISTS`,
    `ALTER TABLE … ADD COLUMN IF NOT EXISTS`) — they run on every start against the live database. There is no migration tool.
 7. **Dates:** due dates are `YYYY-MM-DD` strings computed in the business time zone (`APP_TIMEZONE`, default `Asia/Manila`).
@@ -50,7 +50,7 @@ npm run machines:docs    # regenerate the diagrams after editing shared/
 
 ## Roles (Owner > Admin > Manager > Requestor)
 * **Staff** = Owner, Admin, Manager: see every ticket, edit any field, complete/close, subtasks, internal notes.
-* **Accounts** (add / change role / reset password / remove): the **Owner** and **Admins in IT Support** (`dept-it`) only. IT/Owner also grant each Admin the switches `departments` (departments & routing) and `ratings` (customer ratings, off by default; IT and Owner hold them always). Rules: `shared/roles.js` (`canManageAccounts`, `hasPerm`, `canSetPerms`).
+* **Accounts** (add / change role / reset password / remove): the **Owner** and **Admins in IT Support** (`dept-it`) only. IT/Owner also grant each Admin the switches `tickets` (see tickets of other departments), `departments` (departments & routing) and `ratings` (customer ratings), all off by default; IT and Owner hold them always. **Ticket scope:** an Admin outside IT sees only tickets in their own department plus tickets assigned to them, unless `tickets` is on; Managers, IT and Owner see all. Rules: `shared/roles.js` (`canManageAccounts`, `hasPerm`, `canSetPerms`).
 * **Owner** alone manages Admin and Owner accounts. Nobody changes or deletes themselves; the last Owner cannot be removed.
 * **Requestor**: only their own tickets; may reopen their own *resolved* ticket; may rate it once.
 * There is no Agent role any more (old ones were converted to Manager on startup).

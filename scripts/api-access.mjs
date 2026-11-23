@@ -97,6 +97,23 @@ async function main() {
   S(await call(ivy.token, 'GET', '/emails'), 200, 'IT can read the email log')
   S(await call(hal.token, 'GET', '/emails'), 403, 'other admins cannot'); ok('email log limited to Owner and IT')
 
+  // ---- ticket scope: non-IT Admins see only their department's tickets unless granted the switch
+  const mk = async (dept, title) => (await call(owner.token, 'POST', '/tickets', { title, dept })).body
+  const tHr = await mk('dept-hr', 'Scope HR'), tFin = await mk('dept-fin', 'Scope Fin')
+  const ids = async (u) => (await call(u.token, 'GET', '/tickets')).body.map(x => x.id)
+  let seen = await ids(hal)
+  assert.ok(seen.includes(tHr.id) && !seen.includes(tFin.id)); ok('Admin sees only own-department tickets')
+  S(await call(hal.token, 'PATCH', `/tickets/${tFin.id}`, { status: 'in_progress' }), 403, 'cannot change another department ticket')
+  S(await call(hal.token, 'POST', `/tickets/${tFin.id}/subtasks`, { title: 'x' }), 403, 'cannot add subtasks outside scope')
+  assert.ok((await ids(ivy)).includes(tFin.id) && (await ids(owner)).includes(tFin.id)); ok('IT and Owner see every ticket')
+  S(await call(owner.token, 'PATCH', `/tickets/${tFin.id}`, { assignee: hal.user.id }), 200, 'owner hands the Finance ticket to Hal')
+  assert.ok((await ids(hal)).includes(tFin.id)); ok('a ticket assigned to the Admin becomes visible')
+  S(await call(owner.token, 'PATCH', `/tickets/${tFin.id}`, { assignee: ivy.user.id }), 200, 'owner reassigns it away')
+  assert.ok(!(await ids(hal)).includes(tFin.id))
+  S(await call(ivy.token, 'PATCH', `/users/${hal.user.id}`, { perms: ['tickets'] }), 200, 'IT grants other departments')
+  assert.ok((await ids(hal)).includes(tFin.id)); ok('the switch shows other departments tickets')
+  S(await call(ivy.token, 'PATCH', `/users/${hal.user.id}`, { perms: [] }), 200, 'IT turns it off')
+
   // ---- projects: an Admin has full access only where they created it or were added
   const halP = (await call(hal.token, 'POST', '/projects', { name: 'HR onboarding', privacy: 'members' })).body
   assert.equal(halP.my_role ?? (await call(hal.token, 'GET', `/projects/${halP.id}`)).body.my_role, 'owner')

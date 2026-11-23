@@ -7,7 +7,7 @@ import { useAuth, ROLES, canManageRole, assignableRoles, IT_DEPT, PERMS, PERM_LA
 
 const ROLE_INFO = {
   owner:     { label: 'Owner',     desc: 'Top level. Everything an Admin can do, every project, and the only role that can create, change or remove Admin and Owner accounts.', cls: 'bg-amber-100 text-amber-800' },
-  admin:     { label: 'Admin',     desc: 'Works every ticket. Admins in IT Support also manage accounts. Departments & routing and customer ratings are switched on per Admin by IT or the Owner. Full access only to projects they created or were added to.', cls: 'bg-purple-100 text-purple-700' },
+  admin:     { label: 'Admin',     desc: 'Works every ticket. Admins in IT Support also manage accounts. Admins outside IT see only the tickets of their own department; IT or the Owner can switch on tickets of other departments, departments & routing and customer ratings per Admin. Full access only to projects they created or were added to.', cls: 'bg-purple-100 text-purple-700' },
   manager:   { label: 'Manager',   desc: 'Works every ticket: edit any field, assign, complete, subtasks and internal notes. Can view the team but not change it.', cls: 'bg-blue-100 text-blue-700' },
   requestor: { label: 'Requestor', desc: 'Can only create and follow their own tickets.',                                                                     cls: 'bg-gray-100 text-gray-600' },
 }
@@ -269,7 +269,7 @@ export default function PeopleSettings() {
                                 </label>
                               ))}
                             </div>
-                          ) : <div className="mt-1 text-[11px] text-gray-400">{(u.perms || []).length ? (u.perms || []).map(p => PERM_LABEL[p]).join(', ') : 'Tickets and own projects only'}</div>
+                          ) : <div className="mt-1 text-[11px] text-gray-400">{(u.perms || []).length ? (u.perms || []).map(p => PERM_LABEL[p]).join(', ') : 'Own-department tickets and own projects only'}</div>
                         )}
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-sm">

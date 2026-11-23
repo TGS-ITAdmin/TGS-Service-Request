@@ -18,11 +18,12 @@ export const assignableRoles = (actorRole) => actorRole === 'owner' ? [...ROLES]
 // ---- Admin access ---------------------------------------------------------------------------------------------
 // An Admin works tickets like a Manager. Anything more is granted, and only by IT or the Owner:
 //   * managing accounts (add people, change roles, reset passwords, remove) belongs to the Owner and to Admins in IT Support;
-//   * departments & routing and customer ratings are switches (`perms`) that IT or the Owner turn on per Admin.
+//   * seeing tickets outside their own department, departments & routing, and customer ratings are switches (`perms`) that
+//     IT or the Owner turn on per Admin.
 // Admins in IT Support, and the Owner, hold every ability without needing a switch.
 export const IT_DEPT = 'dept-it'                        // id of the IT Support department
-export const PERMS = ['departments', 'ratings']
-export const PERM_LABEL = { departments: 'Departments & routing', ratings: 'Customer ratings' }
+export const PERMS = ['tickets', 'departments', 'ratings']
+export const PERM_LABEL = { tickets: 'Tickets of other departments', departments: 'Departments & routing', ratings: 'Customer ratings' }
 
 export const isOwnerRole = (role) => role === 'owner'
 export const isIT = (user) => user?.role === 'admin' && user.dept === IT_DEPT
@@ -34,3 +35,10 @@ export const hasPerm = (user, perm) =>
 export const canSetPerms = (actor, target) => canManageAccounts(actor) && target?.role === 'admin' && actor.id !== target.id
 // Keep only known switch names (no duplicates, stable order).
 export const cleanPerms = (list) => PERMS.filter(p => Array.isArray(list) && list.includes(p))
+
+// Ticket scope. Owner, IT, Managers and anyone granted "Tickets of other departments" see every ticket. Any other Admin
+// sees the tickets of their own department, plus any ticket assigned to them (so a hand-off from another department
+// always reaches them). Requestors are handled by their own-ticket rule, not here.
+export const ticketScoped = (user) => user?.role === 'admin' && !hasPerm(user, 'tickets')
+export const inTicketScope = (user, ticket) =>
+  !ticketScoped(user) || (!!user.dept && ticket?.dept === user.dept) || (!!ticket?.assignee && ticket.assignee === user.id)

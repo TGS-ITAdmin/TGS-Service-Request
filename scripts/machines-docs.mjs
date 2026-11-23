@@ -34,6 +34,7 @@ function rolesSection() {
   out.push('', '### Admin access', '',
     `Admins work tickets like Managers. Adding or changing accounts belongs to the **${p.access.accountManagers}** (IT Support is department \`${p.access.itDept}\`). `
     + 'IT and the Owner also switch these on per Admin (they hold them by default): ' + p.access.perms.map(x => `**${x.label}** (\`${x.id}\`)`).join(', ') + '. '
+    + 'Ticket scope: an Admin outside IT Support sees only tickets of their own department plus tickets assigned to them, unless **Tickets of other departments** is on; Managers, IT and the Owner see all tickets. '
     + 'Admins have full access only to projects they created or were added to; the Owner sees every project.', '')
   return out.join('\n')
 }

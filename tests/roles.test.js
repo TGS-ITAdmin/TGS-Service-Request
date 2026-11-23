@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ROLES, STAFF_ROLES, ADMIN_ROLES, isStaffRole, isAdminRole, canManageRole, assignableRoles, IT_DEPT, PERMS, isIT, canManageAccounts, hasPerm, canSetPerms, cleanPerms } from '../shared/roles.js'
+import { ROLES, STAFF_ROLES, ADMIN_ROLES, isStaffRole, isAdminRole, canManageRole, assignableRoles, IT_DEPT, PERMS, isIT, canManageAccounts, hasPerm, canSetPerms, cleanPerms, ticketScoped, inTicketScope } from '../shared/roles.js'
 
 test('four roles, highest first; the Agent role is gone', () => {
   assert.deepEqual(ROLES, ['owner', 'admin', 'manager', 'requestor'])
@@ -75,4 +75,19 @@ test('cleanPerms keeps known switches only, once each, in a stable order', () =>
   assert.deepEqual(cleanPerms(['ratings', 'bogus', 'departments', 'ratings']), ['departments', 'ratings'])
   assert.deepEqual(cleanPerms('nope'), [])
   assert.deepEqual(cleanPerms(undefined), [])
+})
+
+test('ticket scope: non-IT Admins see their department and tickets assigned to them, unless granted the switch', () => {
+  const hr = U('admin', { id: 'h', dept: 'dept-hr' })
+  const T = (dept, assignee = null) => ({ dept, assignee })
+  assert.equal(ticketScoped(hr), true)
+  assert.equal(inTicketScope(hr, T('dept-hr')), true)
+  assert.equal(inTicketScope(hr, T('dept-it')), false)
+  assert.equal(inTicketScope(hr, T(null)), false)
+  assert.equal(inTicketScope(hr, T('dept-it', 'h')), true, 'a ticket handed to them is always visible')
+  const wide = U('admin', { id: 'h', dept: 'dept-hr', perms: ['tickets'] })
+  assert.equal(ticketScoped(wide), false)
+  assert.equal(inTicketScope(wide, T('dept-it')), true)
+  for (const u of [U('owner'), U('admin', { dept: IT_DEPT }), U('manager', { dept: 'dept-hr' })]) assert.equal(inTicketScope(u, T('dept-fin')), true)
+  assert.equal(inTicketScope(U('admin', { id: 'x', dept: null }), T('dept-hr')), false)
 })

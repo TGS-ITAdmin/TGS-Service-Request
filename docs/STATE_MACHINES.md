@@ -204,7 +204,7 @@ Source: `shared/roles.js` · Owner > Admin > Manager > Requestor. Also guarded i
 
 ### Admin access
 
-Admins work tickets like Managers. Adding or changing accounts belongs to the **Owner, and Admins in IT Support** (IT Support is department `dept-it`). IT and the Owner also switch these on per Admin (they hold them by default): **Departments & routing** (`departments`), **Customer ratings** (`ratings`). Admins have full access only to projects they created or were added to; the Owner sees every project.
+Admins work tickets like Managers. Adding or changing accounts belongs to the **Owner, and Admins in IT Support** (IT Support is department `dept-it`). IT and the Owner also switch these on per Admin (they hold them by default): **Tickets of other departments** (`tickets`), **Departments & routing** (`departments`), **Customer ratings** (`ratings`). Ticket scope: an Admin outside IT Support sees only tickets of their own department plus tickets assigned to them, unless **Tickets of other departments** is on; Managers, IT and the Owner see all tickets. Admins have full access only to projects they created or were added to; the Owner sees every project.
 
 ### Browser session
 

@@ -3,7 +3,7 @@ import express from 'express'
 import { randomUUID } from 'crypto'
 import pool, { nextTicketNum } from '../db.js'
 import { requireAuth, requireStaff, STAFF_ROLES } from '../auth.js'
-import { hasPerm } from '../../shared/roles.js'
+import { hasPerm, inTicketScope } from '../../shared/roles.js'
 import { sendMail, notificationEmail } from '../email.js'
 import { dueDateFor, PRIORITIES } from '../sla.js'
 import { ticketStatus, ticketActor, isDone, STATUS_IDS, INITIAL_STATUS } from '../../shared/ticketStatus.js'
@@ -61,8 +61,17 @@ function resolvedAtChange(effects, ticket) {
 
 const invalidTransition = (error, from, to, allowed) => ({ error, code: 'invalid_transition', from, to: to ?? null, allowed })
 
+// Staff see tickets within their scope (Admins outside IT: their department + tickets assigned to them); requestors their own.
 function ticketVisible(user, t) {
-  return isStaff(user) || t.requestor_id === user.id
+  return isStaff(user) ? inTicketScope(user, t) : t.requestor_id === user.id
+}
+
+// Loads a ticket for a staff-only route and sends the 404/403 itself.
+async function loadStaffTicket(req, res) {
+  const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
+  if (!t) { res.status(404).json({ error: 'Not found' }); return null }
+  if (!ticketVisible(req.user, t)) { res.status(403).json({ error: 'Forbidden' }); return null }
+  return t
 }
 
 // GET /api/tickets — staff see all; requestors see their own. Includes counts for list badges.
@@ -81,7 +90,7 @@ r.get('/', async (req, res) => {
   )
   const { rows: ratingRows } = await pool.query('SELECT ticket_id FROM ratings')
   const rated = new Set(ratingRows.map(x => x.ticket_id))
-  res.json(rows.map(t => staff
+  res.json(rows.filter(t => ticketVisible(req.user, t)).map(t => staff
     ? { ...t, rated: rated.has(t.id) }
     : { ...t, subtask_total: 0, subtask_done: 0, rated: rated.has(t.id) }))
 })
@@ -151,6 +160,7 @@ r.post('/', async (req, res) => {
 r.patch('/:id', async (req, res) => {
   const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
   if (!t) return res.status(404).json({ error: 'Not found' })
+  if (isStaff(req.user) && !ticketVisible(req.user, t)) return res.status(403).json({ error: 'Forbidden' })
   const patch = req.body || {}
   const actor = ticketActor(req.user, t)
 
@@ -265,8 +275,7 @@ r.post('/:id/rating', async (req, res) => {
 
 // POST /api/tickets/:id/subtasks — { title, assignee? }
 r.post('/:id/subtasks', requireStaff, async (req, res) => {
-  const { rows: [t] } = await pool.query('SELECT id FROM tickets WHERE id = $1', [req.params.id])
-  if (!t) return res.status(404).json({ error: 'Not found' })
+  const t = await loadStaffTicket(req, res); if (!t) return
   const title = (req.body?.title || '').trim()
   if (!title) return res.status(400).json({ error: 'Subtask title required' })
   const sub = { id: randomUUID(), ticket_id: t.id, title: title.slice(0, 300), done: false, assignee: req.body?.assignee || null, created_at: now(), done_at: null }
@@ -278,6 +287,7 @@ r.post('/:id/subtasks', requireStaff, async (req, res) => {
 
 // PATCH /api/tickets/:id/subtasks/:sid — { title?, done?, assignee? }
 r.patch('/:id/subtasks/:sid', requireStaff, async (req, res) => {
+  if (!(await loadStaffTicket(req, res))) return
   const { rows: [sub] } = await pool.query('SELECT * FROM subtasks WHERE id = $1 AND ticket_id = $2', [req.params.sid, req.params.id])
   if (!sub) return res.status(404).json({ error: 'Not found' })
   const b = req.body || {}
@@ -297,6 +307,7 @@ r.patch('/:id/subtasks/:sid', requireStaff, async (req, res) => {
 
 // DELETE /api/tickets/:id/subtasks/:sid — staff
 r.delete('/:id/subtasks/:sid', requireStaff, async (req, res) => {
+  if (!(await loadStaffTicket(req, res))) return
   const { rows: [sub] } = await pool.query('DELETE FROM subtasks WHERE id = $1 AND ticket_id = $2 RETURNING title', [req.params.sid, req.params.id])
   if (!sub) return res.status(404).json({ error: 'Not found' })
   await addAudit(req.params.id, { actor: req.user.name, action: 'subtask-removed', field: 'Subtask', from: sub.title, to: null })

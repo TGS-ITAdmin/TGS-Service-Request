@@ -4,7 +4,7 @@ import pool from '../db.js'
 import { requireAuth, requireStaff } from '../auth.js'
 import { PRIORITIES } from '../sla.js'
 import { sendMail, taskNotificationEmail } from '../email.js'
-import { isStaffRole } from '../../shared/roles.js'
+import { isStaffRole, inTicketScope } from '../../shared/roles.js'
 import { isDone } from '../../shared/ticketStatus.js'
 import {
   PRIVACY, MEMBER_ROLES, DEFAULT_SECTIONS, FIELD_TYPES, MAX_SELECT_OPTIONS, canCreateProject, cleanFieldValue,
@@ -90,7 +90,7 @@ r.get('/:id', async (req, res) => {
         (SELECT COUNT(*)::int FROM task_attachments a WHERE a.task_id = t.id) AS attachment_count,
         (SELECT COUNT(*)::int FROM task_deps d JOIN tasks b ON b.id = d.blocked_by WHERE d.task_id = t.id AND NOT b.completed) AS blocked_by_open
       FROM project_items i JOIN tasks t ON t.id = i.task_id WHERE i.project_id = $1`, [pid]),
-    pool.query(`SELECT i.id AS item_id, i.section_id, i.position, k.id, k.num, k.title, k.assignee, k.due_date, k.priority, k.status
+    pool.query(`SELECT i.id AS item_id, i.section_id, i.position, k.id, k.num, k.title, k.assignee, k.dept, k.due_date, k.priority, k.status
       FROM project_items i JOIN tickets k ON k.id = i.ticket_id WHERE i.project_id = $1`, [pid]),
     pool.query('SELECT v.field_id, v.item_id, v.value FROM custom_values v JOIN project_items i ON i.id = v.item_id WHERE i.project_id = $1', [pid]),
   ])
@@ -98,7 +98,7 @@ r.get('/:id', async (req, res) => {
   for (const v of values.rows) (byItem[v.item_id] ||= {})[v.field_id] = v.value
   const items = [
     ...taskRows.rows.map(t => ({ kind: 'task', ...t, done: t.completed, blocked: t.blocked_by_open > 0, values: byItem[t.item_id] || {} })),
-    ...ticketRows.rows.map(k => ({ kind: 'ticket', ...k, done: isDone(k.status), values: byItem[k.item_id] || {} })),
+    ...ticketRows.rows.filter(k => inTicketScope(req.user, k)).map(k => ({ kind: 'ticket', ...k, done: isDone(k.status), values: byItem[k.item_id] || {} })),
   ].sort((a, b) => a.position - b.position)
   const { rows: [fav] } = await pool.query('SELECT 1 FROM project_favorites WHERE user_id=$1 AND project_id=$2', [req.user.id, pid])
   res.json({ project, my_role: member, is_favorite: !!fav, members: members.rows, sections: sections.rows, fields: fields.rows, items })
@@ -275,8 +275,8 @@ r.post('/:id/tasks', async (req, res) => {
 // POST /api/projects/:id/tickets — { ticket_id, section_id? } adds an existing form ticket to the project
 r.post('/:id/tickets', async (req, res) => {
   const ctx = await loadProject(req, res); if (!ctx) return
-  const { rows: [k] } = await pool.query('SELECT id,num FROM tickets WHERE id=$1', [req.body?.ticket_id])
-  if (!k) return res.status(404).json({ error: 'Ticket not found' })
+  const { rows: [k] } = await pool.query('SELECT id,num,dept,assignee FROM tickets WHERE id=$1', [req.body?.ticket_id])
+  if (!k || !inTicketScope(req.user, k)) return res.status(404).json({ error: 'Ticket not found' })
   const sec = await resolveSection(ctx.project.id, req.body?.section_id ?? (await pool.query('SELECT id FROM sections WHERE project_id=$1 ORDER BY position LIMIT 1', [ctx.project.id])).rows[0]?.id, res)
   if (!sec.ok) return
   const itemId = randomUUID()
