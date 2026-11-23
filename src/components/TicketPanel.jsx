@@ -272,6 +272,8 @@ export default function TicketPanel({ ticketId, version, users, departments, onC
             <div><div className="font-bold">Request Title:</div><div>{t.title}</div></div>
             <div><div className="font-bold">Urgency:</div><div>{PRIORITY_META[t.priority]?.desc}</div></div>
             <div><div className="font-bold">Requestor:</div><div>{t.req_name} ({t.req_email})</div></div>
+            {t.client && <div><div className="font-bold">Client:</div><div>{t.client}</div></div>}
+            {t.site && <div><div className="font-bold">Site:</div><div>{t.site}</div></div>}
             {dept && <div><div className="font-bold">Department:</div><div>{dept.name}</div></div>}
             {t.category && <div><div className="font-bold">Concern:</div><div>{t.category}</div></div>}
             <div><div className="font-bold">Details of Request:</div><div className="whitespace-pre-wrap">{t.description || <span className="text-gray-400">No details provided.</span>}</div></div>

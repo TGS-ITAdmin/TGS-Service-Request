@@ -91,3 +91,13 @@ test('ticket scope: non-IT Admins see their department and tickets assigned to t
   for (const u of [U('owner'), U('admin', { dept: IT_DEPT }), U('manager', { dept: 'dept-hr' })]) assert.equal(inTicketScope(u, T('dept-fin')), true)
   assert.equal(inTicketScope(U('admin', { id: 'x', dept: null }), T('dept-hr')), false)
 })
+
+import { validateServiceRequest, concernDept, CONCERNS } from '../shared/ticketForm.js'
+test('service request form: every field required, choices must be listed, concern decides the department', () => {
+  const ok = { title: 'T', description: 'd', client: 'ET', site: 'Cebu', category: 'Payroll Dispute' }
+  assert.equal(validateServiceRequest(ok), null)
+  for (const [k, v] of [['title', ' '], ['description', ''], ['client', 'Nope'], ['site', undefined], ['category', 'Other']])
+    assert.ok(validateServiceRequest({ ...ok, [k]: v }), `${k} is checked`)
+  assert.equal(concernDept('Payroll Dispute'), 'dept-payroll')
+  assert.equal(CONCERNS.length, 15)
+})

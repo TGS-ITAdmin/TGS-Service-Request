@@ -66,3 +66,6 @@ npm run machines:docs    # regenerate the diagrams after editing shared/
 * `tickets.status` has no database CHECK constraint (validation is in the API). Add one only after confirming no row holds
   an invalid value.
 * Candidate for the next explicit machine: the App-shell navigation flags (see `docs/STATE_MACHINES.md`, #14).
+
+## Service request form
+The Create Ticket form replaces the Asana form. Fields, option lists and the Concern → department map live in `shared/ticketForm.js` (edit that file to change them). Required: title, urgency, first/last name, email, client, site, concern, details. The server (`POST /api/tickets`) validates the same rules, and a Concern sets the ticket's department and category, so routing and Admin ticket scope follow it. `initDb` adds the Payroll and Recruitment departments and the Concern categories on existing databases.

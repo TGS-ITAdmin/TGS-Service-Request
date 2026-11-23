@@ -1,41 +1,41 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { api } from '../api.js'
 import { Modal } from '../components/Modal.jsx'
 import { useAuth, isStaff } from '../AuthContext.jsx'
 import { PRIORITY_META } from '../lib/meta.js'
+import { CLIENTS, SITES, CONCERNS, URGENCY_NOTE, DETAILS_NOTE, validateServiceRequest } from '../../shared/ticketForm.js'
 
 export default function NewTicket({ onClose, onCreated }) {
   const { user } = useAuth()
   const staff = isStaff(user)
+  const [first0, ...rest0] = (staff ? '' : user.name || '').split(' ')
   const [form, setForm] = useState({
-    title: '', description: '', priority: 'medium',
-    dept: '', category: '', due_date: '',
-    reqName: staff ? '' : user.name,
+    title: '', description: '', priority: '',
+    client: '', site: '', category: '', due_date: '',
+    firstName: first0 || '', lastName: rest0.join(' '),
     reqEmail: staff ? '' : user.email,
   })
-  const [departments, setDepartments] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [files, setFiles] = useState([])
 
-  useEffect(() => { api.departments.list().then(setDepartments) }, [])
-
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
-  const selectedDept = departments.find(d => d.id === form.dept)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
-    if (!form.title.trim()) { setError('Subject is required.'); return }
-    if (staff && (!form.reqName.trim() || !form.reqEmail.trim())) {
-      setError('Requestor name and email are required.'); return
-    }
+    if (!form.title.trim()) { setError('Request Title is required.'); return }
+    if (!form.priority) { setError('Urgency is required.'); return }
+    if (!form.firstName.trim() || !form.lastName.trim()) { setError('First Name and Last Name are required.'); return }
+    if (!form.reqEmail.trim()) { setError('Email address is required.'); return }
+    const formError = validateServiceRequest(form)
+    if (formError) { setError(formError + '.'); return }
     setLoading(true)
     try {
+      const { firstName, lastName, ...rest } = form
       const ticket = await api.tickets.create({
-        ...form,
-        dept: form.dept || null,
-        category: form.category || null,
+        ...rest,
+        reqName: `${firstName.trim()} ${lastName.trim()}`,
         due_date: form.due_date || null,
       })
       for (const f of files) {
@@ -51,75 +51,81 @@ export default function NewTicket({ onClose, onCreated }) {
   }
 
   return (
-    <Modal title="Create New Ticket" onClose={onClose} size="lg">
+    <Modal title="Service request" onClose={onClose} size="lg">
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <div className="bg-red-50 text-red-700 border border-red-200 rounded-lg px-4 py-2 text-sm">{error}</div>}
 
-        {staff && (
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Requestor Name *</label>
-              <input className="input" value={form.reqName} onChange={e => set('reqName', e.target.value)} placeholder="John Doe" />
-            </div>
-            <div>
-              <label className="label">Requestor Email *</label>
-              <input className="input" type="email" value={form.reqEmail} onChange={e => set('reqEmail', e.target.value)} placeholder="john@company.com" />
-            </div>
-          </div>
-        )}
-
         <div>
-          <label className="label">Subject *</label>
-          <input className="input" value={form.title} onChange={e => set('title', e.target.value)} placeholder="Brief description of the issue" />
+          <label className="label">Request Title *</label>
+          <input className="input" value={form.title} onChange={e => set('title', e.target.value)} placeholder="Enter your answer" />
         </div>
 
         <div>
-          <label className="label">Description</label>
-          <textarea
-            className="input resize-none h-28"
-            value={form.description}
-            onChange={e => set('description', e.target.value)}
-            placeholder="Provide as much detail as possible…"
-          />
-        </div>
-
-        <div>
-          <label className="label">Priority</label>
+          <label className="label">Urgency *</label>
+          <p className="text-xs text-gray-500 mb-1">{URGENCY_NOTE}</p>
           <select className="input" value={form.priority} onChange={e => set('priority', e.target.value)}>
-            <option value="urgent">{PRIORITY_META.urgent.desc}</option>
-            <option value="high">{PRIORITY_META.high.desc}</option>
-            <option value="medium">{PRIORITY_META.medium.desc}</option>
-            <option value="low">{PRIORITY_META.low.desc}</option>
+            <option value="">Choose one</option>
+            {['low', 'medium', 'high', 'urgent'].map(p => <option key={p} value={p}>{PRIORITY_META[p].desc}</option>)}
           </select>
-          <p className="text-xs text-gray-400 mt-1">The due date is set automatically from the priority.</p>
         </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">First Name *</label>
+            <input className="input" value={form.firstName} onChange={e => set('firstName', e.target.value)} placeholder="Enter your name" />
+          </div>
+          <div>
+            <label className="label">Last Name *</label>
+            <input className="input" value={form.lastName} onChange={e => set('lastName', e.target.value)} placeholder="Enter your answer" />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Email address (Responses will be sent to this email address) *</label>
+          <input className="input" type="email" value={form.reqEmail} onChange={e => set('reqEmail', e.target.value)} placeholder="Enter your email address" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">Client *</label>
+            <select className="input" value={form.client} onChange={e => set('client', e.target.value)}>
+              <option value="">Choose one</option>
+              {CLIENTS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Site *</label>
+            <select className="input" value={form.site} onChange={e => set('site', e.target.value)}>
+              <option value="">Choose one</option>
+              {SITES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Concern *</label>
+          <select className="input" value={form.category} onChange={e => set('category', e.target.value)}>
+            <option value="">Choose one</option>
+            {CONCERNS.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+          </select>
+          <p className="text-xs text-gray-400 mt-1">Your request is routed to the right team automatically based on the concern.</p>
+        </div>
+
+        <div>
+          <label className="label">Details of Request *</label>
+          <p className="text-xs text-gray-500 mb-1">{DETAILS_NOTE}</p>
+          <textarea className="input resize-none h-28" value={form.description} onChange={e => set('description', e.target.value)} placeholder="Enter your answer" />
+        </div>
+
         {staff && (
           <div>
-            <label className="label">Due date <span className="font-normal text-gray-400">(optional — overrides the automatic date)</span></label>
+            <label className="label">Due date <span className="font-normal text-gray-400">(optional, staff only; overrides the automatic date)</span></label>
             <input type="date" className="input w-48" value={form.due_date} onChange={e => set('due_date', e.target.value)} />
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="label">Department</label>
-            <select className="input" value={form.dept} onChange={e => { set('dept', e.target.value); set('category', '') }}>
-              <option value="">Unassigned</option>
-              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">Category</label>
-            <select className="input" value={form.category} onChange={e => set('category', e.target.value)} disabled={!selectedDept}>
-              <option value="">None</option>
-              {(selectedDept?.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        </div>
-        <p className="text-xs text-gray-400 -mt-2">Tickets are routed to the right person automatically based on department and category.</p>
-
         <div>
-          <label className="label">Attachments</label>
+          <label className="label">Screenshots or Files to support request</label>
           <input type="file" multiple data-testid="new-ticket-files"
             className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-gray-200"
             onChange={e => {
@@ -134,7 +140,7 @@ export default function NewTicket({ onClose, onCreated }) {
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn-primary" disabled={loading}>
-            {loading ? 'Creating…' : '🎫 Create Ticket'}
+            {loading ? 'Creating…' : 'Submit'}
           </button>
         </div>
       </form>

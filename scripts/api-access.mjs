@@ -98,8 +98,8 @@ async function main() {
   S(await call(hal.token, 'GET', '/emails'), 403, 'other admins cannot'); ok('email log limited to Owner and IT')
 
   // ---- ticket scope: non-IT Admins see only their department's tickets unless granted the switch
-  const mk = async (dept, title) => (await call(owner.token, 'POST', '/tickets', { title, dept })).body
-  const tHr = await mk('dept-hr', 'Scope HR'), tFin = await mk('dept-fin', 'Scope Fin')
+  const mk = async (category, title) => (await call(owner.token, 'POST', '/tickets', { title, description: 'x', priority: 'low', client: 'Internal', site: 'WFH', category })).body
+  const tHr = await mk('HMO', 'Scope HR'), tFin = await mk('Hubstaff', 'Scope IT')
   const ids = async (u) => (await call(u.token, 'GET', '/tickets')).body.map(x => x.id)
   let seen = await ids(hal)
   assert.ok(seen.includes(tHr.id) && !seen.includes(tFin.id)); ok('Admin sees only own-department tickets')

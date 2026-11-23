@@ -134,7 +134,7 @@ async function main() {
   assert.equal((await call(bob.token, 'POST', `/projects/${p.id}/fields`, { name: 'x', type: 'text' })).status, 403); ok('only owners manage fields')
 
   // ---- tickets in projects (multi-homing)
-  const tk = (await call(rita.token, 'POST', '/tickets', { title: 'Printer broken', description: 'jam', dept: 'dept-it', category: 'Hardware Issue' })).body
+  const tk = (await call(rita.token, 'POST', '/tickets', { title: 'Printer broken', description: 'jam', priority: 'medium', client: 'Internal', site: 'Cebu', category: 'Hubstaff' })).body
   const addT = await call(alice.token, 'POST', `/projects/${p.id}/tickets`, { ticket_id: tk.id })
   assert.equal(addT.status, 201)
   assert.equal((await call(alice.token, 'POST', `/projects/${p.id}/tickets`, { ticket_id: tk.id })).status, 409); ok('ticket added once')

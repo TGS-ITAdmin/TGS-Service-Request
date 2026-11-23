@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import pool, { nextTicketNum } from '../db.js'
 import { requireAuth, requireStaff, STAFF_ROLES } from '../auth.js'
 import { hasPerm, inTicketScope } from '../../shared/roles.js'
+import { validateServiceRequest, concernDept } from '../../shared/ticketForm.js'
 import { sendMail, notificationEmail } from '../email.js'
 import { dueDateFor, PRIORITIES } from '../sla.js'
 import { ticketStatus, ticketActor, isDone, STATUS_IDS, INITIAL_STATUS } from '../../shared/ticketStatus.js'
@@ -119,17 +120,19 @@ r.get('/:id', async (req, res) => {
 
 // POST /api/tickets — any authenticated user creates; requestor fields auto-filled
 r.post('/', async (req, res) => {
-  const { title, description, priority, dept, category, due_date, reqName, reqEmail } = req.body || {}
-  if (!title?.trim()) return res.status(400).json({ error: 'Subject is required' })
-  if (priority !== undefined && priority !== '' && !PRIORITIES.includes(priority)) return res.status(400).json({ error: 'Invalid priority' })
+  const { title, description, priority, category, due_date, reqName, reqEmail, client, site } = req.body || {}
+  const formError = validateServiceRequest(req.body)
+  if (formError) return res.status(400).json({ error: formError })
+  const dept = concernDept(category)   // the Concern decides the department
+  if (!PRIORITIES.includes(priority)) return res.status(400).json({ error: 'Urgency is required' })
   const requestorSelf = !isStaff(req.user)
   const rName = requestorSelf ? req.user.name : (reqName?.trim() || req.user.name)
   const rEmail = requestorSelf ? req.user.email : (reqEmail?.trim() || req.user.email)
-  const assignee = await autoAssign(dept || null, category || null)
+  const assignee = await autoAssign(dept, category)
   const t = {
     id: randomUUID(), num: await nextTicketNum(), title: title.trim(),
     description: description || '', status: INITIAL_STATUS, priority: priority || 'medium',
-    dept: dept || null, category: category || null, assignee,
+    dept, category, client, site, assignee,
     requestor_id: requestorSelf ? req.user.id : null,
     req_name: rName, req_email: rEmail,
     // due date follows the priority; staff may enter their own, requestors cannot
@@ -137,10 +140,10 @@ r.post('/', async (req, res) => {
     created_at: now(), updated_at: now(), resolved_at: null,
   }
   await pool.query(
-    `INSERT INTO tickets (id,num,title,description,status,priority,dept,category,assignee,requestor_id,req_name,req_email,due_date,created_at,updated_at,resolved_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+    `INSERT INTO tickets (id,num,title,description,status,priority,dept,category,assignee,requestor_id,req_name,req_email,due_date,created_at,updated_at,resolved_at,client,site)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
     [t.id, t.num, t.title, t.description, t.status, t.priority, t.dept, t.category, t.assignee,
-     t.requestor_id, t.req_name, t.req_email, t.due_date, t.created_at, t.updated_at, t.resolved_at]
+     t.requestor_id, t.req_name, t.req_email, t.due_date, t.created_at, t.updated_at, t.resolved_at, t.client, t.site]
   )
   await addAudit(t.id, { actor: req.user.name, action: 'created', field: null, from: null, to: `Ticket #${t.num} created` })
   for (const title of DEFAULT_SUBTASKS) {

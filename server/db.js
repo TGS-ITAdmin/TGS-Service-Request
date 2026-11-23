@@ -1,3 +1,4 @@
+import { CONCERNS, DEPT_PAYROLL, DEPT_RECRUIT } from '../shared/ticketForm.js'
 import pg from 'pg'
 import bcrypt from 'bcryptjs'
 
@@ -244,12 +245,22 @@ CREATE TABLE IF NOT EXISTS custom_values (
 );
 `
 
+// Service request form: Client and Site on tickets; Payroll and Recruitment departments; every Concern is a category of its department.
+async function ensureServiceRequestForm() {
+  await pool.query('ALTER TABLE tickets ADD COLUMN IF NOT EXISTS client TEXT')
+  await pool.query('ALTER TABLE tickets ADD COLUMN IF NOT EXISTS site TEXT')
+  await pool.query("INSERT INTO departments (id,name,color) VALUES ($1,'Payroll','#0ea5e9') ON CONFLICT (id) DO NOTHING", [DEPT_PAYROLL])
+  await pool.query("INSERT INTO departments (id,name,color) VALUES ($1,'Recruitment','#ec4899') ON CONFLICT (id) DO NOTHING", [DEPT_RECRUIT])
+  for (const c of CONCERNS) await pool.query('INSERT INTO categories (dept_id,name) SELECT $1,$2 WHERE EXISTS (SELECT 1 FROM departments WHERE id = $1) ON CONFLICT DO NOTHING', [c.dept, c.name])
+}
+
 export async function initDb() {
   await pool.query(SCHEMA)
   // Migrations for databases created before user management existed
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false')
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ')
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS perms TEXT[] NOT NULL DEFAULT '{}'")
+  await ensureServiceRequestForm()
   // Role model is Owner / Admin / Manager / Requestor. Convert anything left over from the old model.
   await pool.query("UPDATE users SET role = 'manager' WHERE role = 'agent'")
   await pool.query("UPDATE messages SET sender_type = 'staff' WHERE sender_type = 'agent'")
@@ -298,6 +309,8 @@ export async function initDb() {
   await pool.query(insRoute, ['dept-fin','_default','u4'])
   await pool.query(insRoute, ['dept-ops','_default','u5'])
   await pool.query(insRoute, ['dept-fac','_default',null])
+
+  await ensureServiceRequestForm()   // departments now exist on a fresh database
 
   // Seeded demo accounts use well-known passwords, so make people replace them on first login
   await pool.query('UPDATE users SET must_change_password = true')
