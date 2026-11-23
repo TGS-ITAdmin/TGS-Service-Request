@@ -41,7 +41,7 @@ export function NewProjectDialog({ onClose, onCreated }) {
           <select id="np-privacy" className="input" value={privacy} onChange={e => setPrivacy(e.target.value)}>
             {PRIVACY.map(p => <option key={p} value={p}>{PRIVACY_LABEL[p]}</option>)}
           </select>
-          <p className="text-xs text-gray-500 mt-1">Admins and the Owner can always see every project. You can add members after it is created.</p>
+          <p className="text-xs text-gray-500 mt-1">The Owner can always see every project. You can add members after it is created.</p>
         </div>
         <div className="flex justify-end gap-2"><button type="button" className="btn-secondary" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={!name.trim() || busy}>{busy ? 'Creating…' : 'Create project'}</button></div>
       </form>
@@ -81,7 +81,7 @@ export function MembersDialog({ project, members, users, me, canManage, onClose,
           <button className="btn-primary" disabled={!adding} onClick={() => run(async () => { await api.projects.addMember(project.id, { user_id: adding }); setAdding('') })}>Add</button>
         </div>
       )}
-      {!canManage && <p className="text-xs text-gray-500">Only project owners and admins can change members.</p>}
+      {!canManage && <p className="text-xs text-gray-500">Only project owners, Admins who belong to the project, and the Owner can change members.</p>}
     </Modal>
   )
 }

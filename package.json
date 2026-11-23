@@ -12,6 +12,7 @@
     "machines:docs": "node scripts/machines-docs.mjs",
     "machines:check": "node scripts/machines-docs.mjs --check",
     "test:api": "node scripts/api-projects.mjs",
+    "test:access": "node scripts/api-access.mjs",
     "check": "npm test && npm run machines:check"
   },
   "dependencies": {

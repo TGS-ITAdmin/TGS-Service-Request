@@ -2,9 +2,11 @@ import { Router } from 'express'
 import express from 'express'
 import { randomUUID } from 'crypto'
 import pool, { nextTicketNum } from '../db.js'
-import { requireAuth, requireStaff, STAFF_ROLES, ADMIN_ROLES } from '../auth.js'
+import { requireAuth, requireStaff, STAFF_ROLES } from '../auth.js'
+import { hasPerm } from '../../shared/roles.js'
 import { sendMail, notificationEmail } from '../email.js'
 import { dueDateFor, PRIORITIES } from '../sla.js'
+import { ticketStatus, ticketActor, isDone, STATUS_IDS, INITIAL_STATUS } from '../../shared/ticketStatus.js'
 
 const r = Router()
 r.use(requireAuth)
@@ -23,12 +25,41 @@ async function autoAssign(deptId, category) {
   return map._default ?? null
 }
 
-async function addAudit(ticketId, { actor, action, field, from, to }) {
-  await pool.query(
+async function addAudit(ticketId, { actor, action, field, from, to }, db = pool) {
+  await db.query(
     'INSERT INTO audit (id,ticket_id,actor,action,field,"from","to",ts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
     [randomUUID(), ticketId, actor, action, field, from, to, now()]
   )
 }
+
+// Writes a ticket update and its audit rows in ONE transaction, so the activity log can never claim a change
+// that did not happen (or miss one that did).
+async function applyTicketChange(ticketId, updates, audits = []) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const keys = Object.keys(updates)
+    if (keys.length) {
+      const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
+      await client.query(`UPDATE tickets SET ${setSql} WHERE id = $${keys.length + 1}`, [...keys.map(k => updates[k]), ticketId])
+    }
+    for (const a of audits) await addAudit(ticketId, a, client)
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw e
+  } finally { client.release() }
+}
+
+// Applies the machine's resolved_at effects (see the effect list in shared/ticketStatus.js)
+function resolvedAtChange(effects, ticket) {
+  if (effects.includes('stamp_resolved_at')) return { resolved_at: now() }
+  if (effects.includes('stamp_resolved_at_if_missing')) return ticket.resolved_at ? {} : { resolved_at: now() }
+  if (effects.includes('clear_resolved_at')) return { resolved_at: null }
+  return {}
+}
+
+const invalidTransition = (error, from, to, allowed) => ({ error, code: 'invalid_transition', from, to: to ?? null, allowed })
 
 function ticketVisible(user, t) {
   return isStaff(user) || t.requestor_id === user.id
@@ -72,8 +103,8 @@ r.get('/:id', async (req, res) => {
     : { rows: [] }
   const { rows: attachments } = await pool.query(
     'SELECT id,ticket_id,filename,mime,size,uploaded_by,uploaded_by_name,created_at FROM attachments WHERE ticket_id = $1 ORDER BY created_at', [t.id])
-  // ratings visible to admin + the requestor who left it
-  const showRating = ADMIN_ROLES.includes(req.user.role) || (rating && rating.requestor_id === req.user.id)
+  // ratings are visible to the requestor who left it, and to Owner / IT / Admins granted "Customer ratings"
+  const showRating = hasPerm(req.user, 'ratings') || (rating && rating.requestor_id === req.user.id)
   res.json({ ticket: t, messages, audit, subtasks, attachments, rating: showRating ? (rating || null) : (rating ? { exists: true } : null) })
 })
 
@@ -88,7 +119,7 @@ r.post('/', async (req, res) => {
   const assignee = await autoAssign(dept || null, category || null)
   const t = {
     id: randomUUID(), num: await nextTicketNum(), title: title.trim(),
-    description: description || '', status: 'open', priority: priority || 'medium',
+    description: description || '', status: INITIAL_STATUS, priority: priority || 'medium',
     dept: dept || null, category: category || null, assignee,
     requestor_id: requestorSelf ? req.user.id : null,
     req_name: rName, req_email: rEmail,
@@ -114,24 +145,39 @@ r.post('/', async (req, res) => {
   res.status(201).json(t)
 })
 
-// PATCH /api/tickets/:id — staff edit fields; requestor may only reopen own resolved ticket
+// PATCH /api/tickets/:id — staff edit fields; a requestor may only reopen their own resolved ticket.
+// Status changes go through the ticketStatus machine (shared/ticketStatus.js): it decides what is legal and which
+// effects follow (resolved_at, emails). Everything is validated BEFORE anything is written.
 r.patch('/:id', async (req, res) => {
   const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
   if (!t) return res.status(404).json({ error: 'Not found' })
   const patch = req.body || {}
+  const actor = ticketActor(req.user, t)
 
-  // Requestor reopen path
+  // ---- Requestor: reopen own resolved ticket, nothing else
   if (!isStaff(req.user)) {
     if (t.requestor_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' })
-    if (patch.status !== 'open' || t.status !== 'resolved') return res.status(403).json({ error: 'You can only reopen a resolved ticket' })
-    await pool.query("UPDATE tickets SET status='open', resolved_at=NULL, updated_at=$1 WHERE id=$2", [now(), t.id])
-    await addAudit(t.id, { actor: req.user.name, action: 'changed', field: 'Status', from: 'Resolved', to: 'Open (reopened by requestor)' })
-    const a = t.assignee ? (await pool.query('SELECT name,email FROM users WHERE id = $1', [t.assignee])).rows[0] : null
-    if (a?.email) sendMail({ to: a.email, subject: `Ticket #${t.num} was reopened by ${req.user.name}`, html: notificationEmail(t.title, patch.reason || 'The requestor reopened this ticket.', t.num) })
+    const move = ticketStatus.transition(t.status, patch.status, actor)
+    if (!move.ok) return res.status(403).json(invalidTransition('You can only reopen a resolved ticket', t.status, patch.status, move.allowed))
+    await applyTicketChange(t.id, { status: move.rule.to, ...resolvedAtChange(move.effects, t), updated_at: now() }, [
+      { actor: req.user.name, action: 'changed', field: 'Status', from: 'Resolved', to: 'Open (reopened by requestor)' },
+    ])
+    if (move.effects.includes('notify_assignee_reopened')) {
+      const a = t.assignee ? (await pool.query('SELECT name,email FROM users WHERE id = $1', [t.assignee])).rows[0] : null
+      if (a?.email) sendMail({ to: a.email, subject: `Ticket #${t.num} was reopened by ${req.user.name}`, html: notificationEmail(t.title, patch.reason || 'The requestor reopened this ticket.', t.num) })
+    }
     const { rows: [updated] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [t.id])
     return res.json(updated)
   }
 
+  // ---- Staff: validate first
+  let statusMove = null
+  if (patch.status !== undefined) {
+    const move = ticketStatus.transition(t.status, patch.status, actor)
+    if (!move.ok && move.reason === 'unknown_state') return res.status(400).json({ error: 'Invalid status', code: 'invalid_status', allowed: STATUS_IDS })
+    if (!move.ok && move.reason === 'not_allowed') return res.status(409).json(invalidTransition(`A ${t.status} ticket cannot be set to ${patch.status}`, t.status, patch.status, move.allowed))
+    if (move.ok) statusMove = move            // same_state is a harmless no-op
+  }
   if (patch.priority !== undefined && patch.priority !== t.priority) {
     if (!PRIORITIES.includes(patch.priority)) return res.status(400).json({ error: 'Invalid priority' })
     if (patch.due_date === undefined) patch.due_date = dueDateFor(patch.priority)   // new priority => new due date
@@ -147,22 +193,19 @@ r.patch('/:id', async (req, res) => {
   }
   const LABELS = { status: 'Status', priority: 'Priority', dept: 'Department', assignee: 'Assignee', category: 'Category', due_date: 'Due Date', title: 'Subject' }
   const updates = {}
+  const audits = []
   for (const f of Object.keys(LABELS)) {
     if (patch[f] !== undefined && patch[f] !== t[f]) {
       updates[f] = patch[f] || null
-      await addAudit(t.id, { actor: req.user.name, action: 'changed', field: LABELS[f], from: disp(f, t[f]), to: disp(f, patch[f]) })
+      audits.push({ actor: req.user.name, action: 'changed', field: LABELS[f], from: disp(f, t[f]), to: disp(f, patch[f]) })
     }
   }
-  if (updates.status === 'resolved' && t.status !== 'resolved') updates.resolved_at = now()
-  if (updates.status && !['resolved', 'closed'].includes(updates.status)) updates.resolved_at = null
+  if (statusMove) Object.assign(updates, resolvedAtChange(statusMove.effects, t))
+
   if (Object.keys(updates).length) {
     updates.updated_at = now()
-    const keys = Object.keys(updates)
-    const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
-    const values = keys.map(k => updates[k])
-    await pool.query(`UPDATE tickets SET ${setSql} WHERE id = $${keys.length + 1}`, [...values, t.id])
-    // notify requestor on resolution
-    if (updates.status === 'resolved' && t.req_email) {
+    await applyTicketChange(t.id, updates, audits)
+    if (statusMove?.effects.includes('notify_requestor_resolved') && t.req_email) {
       sendMail({ to: t.req_email, subject: `Your ticket #${t.num} has been resolved`, html: notificationEmail(t.title, 'Your ticket was marked resolved. Log in to review it, reopen it if the issue persists, or rate your experience.', t.num) })
     }
   }
@@ -205,7 +248,7 @@ r.post('/:id/rating', async (req, res) => {
   const { rows: [t] } = await pool.query('SELECT * FROM tickets WHERE id = $1', [req.params.id])
   if (!t) return res.status(404).json({ error: 'Not found' })
   if (t.requestor_id !== req.user.id) return res.status(403).json({ error: 'Only the ticket creator can rate' })
-  if (!['resolved', 'closed'].includes(t.status)) return res.status(400).json({ error: 'Ticket must be resolved before rating' })
+  if (!isDone(t.status)) return res.status(400).json({ error: 'Ticket must be resolved before rating' })
   const stars = Number(req.body?.stars)
   if (!Number.isInteger(stars) || stars < 1 || stars > 5) return res.status(400).json({ error: 'Rating must be 1-5 stars' })
   const { rows: [existing] } = await pool.query('SELECT 1 FROM ratings WHERE ticket_id = $1', [t.id])

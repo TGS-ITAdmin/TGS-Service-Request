@@ -1,38 +1,61 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { api, authToken } from './api.js'
+import { createContext, useContext, useReducer, useEffect, useCallback, useRef } from 'react'
+import { api, authToken, setUnauthorizedHandler } from './api.js'
+import { sessionReducer, initialSession } from './lib/session.js'
+import { ROLES, ROLE_RANK, STAFF_ROLES, ADMIN_ROLES, isStaffRole, isAdminRole, canManageRole, assignableRoles, IT_DEPT, PERMS, PERM_LABEL, isIT, canManageAccounts, hasPerm, canSetPerms } from '../shared/roles.js'
+
+// Roles are defined once in shared/roles.js (the server enforces the same rules). Re-exported for the pages.
+export { ROLES, ROLE_RANK, STAFF_ROLES, ADMIN_ROLES, canManageRole, assignableRoles, IT_DEPT, PERMS, PERM_LABEL, isIT, canManageAccounts, hasPerm, canSetPerms }
 
 const AuthContext = createContext(null)
 
+// Sign-in session: checking → anonymous | authenticated | unreachable. See shared/session.js for every legal move.
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
-  const [checking, setChecking] = useState(true)
+  const [state, dispatch] = useReducer(sessionReducer, undefined, initialSession)
+  const statusRef = useRef(state.status)
+  statusRef.current = state.status
 
-  useEffect(() => {
-    if (!authToken.get()) { setChecking(false); return }
+  const boot = useCallback(() => {
+    if (!authToken.get()) { dispatch({ type: 'boot_no_session' }); return }
     api.auth.me()
-      .then(({ user }) => setUser(user))
-      .catch(() => authToken.set(null))
-      .finally(() => setChecking(false))
+      .then(({ user }) => dispatch({ type: 'boot_ok', user }))
+      .catch((e) => {
+        if (e.status === 401) { authToken.set(null); dispatch({ type: 'boot_rejected' }) }
+        else dispatch({ type: 'boot_unreachable' })      // network blip / server restarting: keep the token, offer Retry
+      })
   }, [])
+  useEffect(() => { boot() }, [boot])
 
-  const login = useCallback(async (email, password) => {
-    const { token, user } = await api.auth.login({ email, password })
-    authToken.set(token)
-    setUser(user)
-  }, [])
-
-  const logout = useCallback(() => {
-    authToken.set(null)
-    setUser(null)
+  // Any API call the server rejects with 401 (while we hold a token) ends the session cleanly.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      if (statusRef.current === 'authenticated') { authToken.set(null); dispatch({ type: 'expired' }) }
+    })
+    return () => setUnauthorizedHandler(null)
   }, [])
 
   const setSession = useCallback((token, user) => {
     authToken.set(token)
-    setUser(user)
+    dispatch({ type: 'session_set', user })
   }, [])
 
+  const login = useCallback(async (email, password) => {
+    const { token, user } = await api.auth.login({ email, password })
+    setSession(token, user)
+  }, [setSession])
+
+  const logout = useCallback(() => {
+    authToken.set(null)
+    dispatch({ type: 'logout' })
+  }, [])
+
+  const retry = useCallback(() => { dispatch({ type: 'retry' }); boot() }, [boot])
+
   return (
-    <AuthContext.Provider value={{ user, checking, login, logout, setSession }}>
+    <AuthContext.Provider value={{
+      user: state.user, status: state.status, notice: state.notice,
+      checking: state.status === 'checking', unreachable: state.status === 'unreachable',
+      login, logout, setSession, retry,
+    }}>
       {children}
     </AuthContext.Provider>
   )
@@ -44,10 +67,7 @@ export function useAuth() {
   return ctx
 }
 
-// Roles: owner > admin > manager > requestor
-export const STAFF_ROLES = ['owner', 'admin', 'manager']
-export const ROLE_RANK = { owner: 4, admin: 3, manager: 2, requestor: 1 }
-export const isStaff = (user) => !!user && STAFF_ROLES.includes(user.role)
+export const isStaff = (user) => !!user && isStaffRole(user.role)
 export const canEditTicket = isStaff                       // every staff role can work any ticket
-export const isAdmin = (user) => !!user && ['owner', 'admin'].includes(user.role)   // manages people & settings
+export const isAdmin = (user) => !!user && isAdminRole(user.role)   // Admin-level role (Owner or Admin); what they may manage is canManageAccounts / hasPerm
 export const isOwner = (user) => !!user && user.role === 'owner'

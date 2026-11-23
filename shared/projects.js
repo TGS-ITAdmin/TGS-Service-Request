@@ -1,5 +1,5 @@
 // Rules for Projects, shared by the server (enforcement) and the browser (what to show). Pure functions only.
-import { isStaffRole, isAdminRole } from './roles.js'
+import { isStaffRole, isOwnerRole } from './roles.js'
 
 export const PRIVACY = ['members', 'staff']                   // private to members | visible to all staff
 export const PRIVACY_LABEL = { members: 'Private to members', staff: 'Visible to all staff' }
@@ -10,14 +10,15 @@ export const MAX_SELECT_OPTIONS = 30
 
 // ---- Who can do what ------------------------------------------------------------------------------------------
 // `member` is the user's project_members.role ('owner' | 'member') or null/undefined when they are not a member.
-// Owners and Admins can see and manage every project (so a project never gets orphaned); other staff see a project
-// when it is visible to all staff or they are a member.
+// The Owner can see and manage every project (so a project never gets orphaned). Everyone else on staff sees a project
+// when it is visible to all staff or they are a member. An Admin has full access (manage) only in projects they
+// created or were added to; a Manager manages only projects they own.
 export const canCreateProject = (user) => isStaffRole(user?.role)
 export const canViewProject = (user, project, member) =>
-  isStaffRole(user?.role) && (isAdminRole(user.role) || project.privacy === 'staff' || !!member)
+  isStaffRole(user?.role) && (isOwnerRole(user.role) || project.privacy === 'staff' || !!member)
 export const canWorkInProject = canViewProject        // add / edit / complete tasks and move them between sections
 export const canManageProject = (user, member) =>
-  isStaffRole(user?.role) && (isAdminRole(user.role) || member === 'owner')   // settings, members, sections, fields, delete
+  isStaffRole(user?.role) && (isOwnerRole(user.role) || member === 'owner' || (user.role === 'admin' && !!member))   // settings, members, sections, fields, delete
 
 // ---- Dependencies ---------------------------------------------------------------------------------------------
 // edges: [{ task_id, blocked_by }]  — "task_id cannot be completed until blocked_by is".

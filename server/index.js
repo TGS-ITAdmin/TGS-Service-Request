@@ -10,7 +10,7 @@ import departmentsRouter from './routes/departments.js'
 import projectsRouter from './routes/projects.js'
 import tasksRouter from './routes/tasks.js'
 import { sentEmails } from './email.js'
-import { requireAuth, requireAdmin } from './auth.js'
+import { requireAuth, requireManageAccounts } from './auth.js'
 import { initDb } from './db.js'
 import { describeAll } from '../shared/index.js'
 
@@ -35,7 +35,7 @@ app.use('/api/tasks', tasksRouter)
 // Machine-readable description of every lifecycle (ticket status, account, session) and the role policy.
 app.get('/api/machines', requireAuth, (req, res) => res.json(describeAll()))
 
-app.get('/api/emails', requireAuth, requireAdmin, (req, res) => res.json(sentEmails))
+app.get('/api/emails', requireAuth, requireManageAccounts, (req, res) => res.json(sentEmails))
 
 // Serve the built React SPA (npm run build → dist/)
 const distDir = join(__dirname, '../dist')

@@ -249,6 +249,7 @@ export async function initDb() {
   // Migrations for databases created before user management existed
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false')
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ')
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS perms TEXT[] NOT NULL DEFAULT '{}'")
   // Role model is Owner / Admin / Manager / Requestor. Convert anything left over from the old model.
   await pool.query("UPDATE users SET role = 'manager' WHERE role = 'agent'")
   await pool.query("UPDATE messages SET sender_type = 'staff' WHERE sender_type = 'agent'")

@@ -33,7 +33,7 @@ npm run machines:docs    # regenerate the diagrams after editing shared/
 4. **API errors** are `{ error: "human text", code?: "machine_code", allowed?: [...] }`. In the UI show them with
    `notifyError(e)` (`src/lib/errors.js`) — it stays quiet when the session just ended.
 5. **Permissions are enforced on the server.** The UI only mirrors them to hide buttons. Routes use `requireAuth`,
-   `requireStaff`, `requireAdmin`; row-level rules (own tickets only, internal notes staff-only) live in the route.
+   `requireStaff`, `requireManageAccounts`, `requirePerm('departments'|'ratings')`; row-level rules (own tickets only, internal notes staff-only) live in the route.
 6. **Schema changes** go in `server/db.js` as idempotent statements (`CREATE TABLE IF NOT EXISTS`,
    `ALTER TABLE … ADD COLUMN IF NOT EXISTS`) — they run on every start against the live database. There is no migration tool.
 7. **Dates:** due dates are `YYYY-MM-DD` strings computed in the business time zone (`APP_TIMEZONE`, default `Asia/Manila`).
@@ -42,15 +42,15 @@ npm run machines:docs    # regenerate the diagrams after editing shared/
 - **Tasks are not tickets.** A project *task* (`tasks`) has no ticket number or SLA and completes with `taskState` (complete / incomplete;
   workflow is the *section* it sits in). A form *ticket* can also be placed in projects. Both appear as a `project_items` row
   (exactly one of `task_id` / `ticket_id`), so one task or ticket can live in several projects.
-- Access: only Owner/Admin/Manager. A project is `members`-private or `staff`-visible; Owner/Admin always see all. Project owners
-  (and Admin/Owner) manage settings, members, sections and custom fields. A project you may not see answers **404**, not 403.
+- Access: only Owner/Admin/Manager. A project is `members`-private or `staff`-visible; only the Owner always sees all (an Admin sees projects
+  they are in, plus staff-visible ones). Project owners, Admins who belong to the project, and the Owner manage settings, members, sections and custom fields. A project you may not see answers **404**, not 403.
 - Dependencies (`task_deps`): a task cannot be completed while a task it waits on is incomplete (409 `code: "blocked"`); loops are refused.
 - Recurring tasks: completing one creates the next copy (same sections, subtasks reset). Reopening and completing again creates another.
 - Removing a task from its last project deletes it; deleting a project deletes only tasks that live nowhere else — never tickets.
 
 ## Roles (Owner > Admin > Manager > Requestor)
 * **Staff** = Owner, Admin, Manager: see every ticket, edit any field, complete/close, subtasks, internal notes.
-* **Admin level** = Owner, Admin: also manage people, departments, routing.
+* **Accounts** (add / change role / reset password / remove): the **Owner** and **Admins in IT Support** (`dept-it`) only. IT/Owner also grant each Admin the switches `departments` (departments & routing) and `ratings` (customer ratings, off by default; IT and Owner hold them always). Rules: `shared/roles.js` (`canManageAccounts`, `hasPerm`, `canSetPerms`).
 * **Owner** alone manages Admin and Owner accounts. Nobody changes or deletes themselves; the last Owner cannot be removed.
 * **Requestor**: only their own tickets; may reopen their own *resolved* ticket; may rate it once.
 * There is no Agent role any more (old ones were converted to Manager on startup).

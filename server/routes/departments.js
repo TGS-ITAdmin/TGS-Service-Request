@@ -1,6 +1,9 @@
 import { Router } from 'express'
 import pool from '../db.js'
-import { requireAuth, requireAdmin } from '../auth.js'
+import { requireAuth, requirePerm } from '../auth.js'
+import { IT_DEPT } from '../../shared/roles.js'
+
+const requireDepartments = requirePerm('departments')
 
 const r = Router()
 r.use(requireAuth)
@@ -12,7 +15,7 @@ r.get('/', async (req, res) => {
   res.json(depts.map(d => ({ ...d, categories: cats.filter(c => c.dept_id === d.id).map(c => c.name) })))
 })
 
-// GET /api/departments/routing — staff view; only admin can edit
+// GET /api/departments/routing — staff view; editing needs the Departments & routing access
 r.get('/routing', async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM routing')
   const map = {}
@@ -21,7 +24,7 @@ r.get('/routing', async (req, res) => {
 })
 
 // PUT /api/departments/routing — admin: { deptId, category, userId|null }
-r.put('/routing', requireAdmin, async (req, res) => {
+r.put('/routing', requireDepartments, async (req, res) => {
   const { deptId, category, userId } = req.body || {}
   if (!deptId || !category) return res.status(400).json({ error: 'deptId and category required' })
   await pool.query(
@@ -32,7 +35,7 @@ r.put('/routing', requireAdmin, async (req, res) => {
 })
 
 // POST /api/departments — admin
-r.post('/', requireAdmin, async (req, res) => {
+r.post('/', requireDepartments, async (req, res) => {
   const { name, color } = req.body || {}
   if (!name?.trim()) return res.status(400).json({ error: 'Name required' })
   const { rows: [existing] } = await pool.query('SELECT 1 FROM departments WHERE lower(name) = lower($1)', [name.trim()])
@@ -44,7 +47,9 @@ r.post('/', requireAdmin, async (req, res) => {
 })
 
 // DELETE /api/departments/:id — admin
-r.delete('/:id', requireAdmin, async (req, res) => {
+r.delete('/:id', requireDepartments, async (req, res) => {
+  // IT Support decides who may manage accounts, so it cannot be deleted
+  if (req.params.id === IT_DEPT) return res.status(400).json({ error: 'IT Support cannot be deleted' })
   await pool.query('UPDATE tickets SET dept = NULL, category = NULL WHERE dept = $1', [req.params.id])
   await pool.query('UPDATE users SET dept = NULL WHERE dept = $1', [req.params.id])
   await pool.query('DELETE FROM routing WHERE dept_id = $1', [req.params.id])
@@ -53,7 +58,7 @@ r.delete('/:id', requireAdmin, async (req, res) => {
 })
 
 // POST /api/departments/:id/categories — admin
-r.post('/:id/categories', requireAdmin, async (req, res) => {
+r.post('/:id/categories', requireDepartments, async (req, res) => {
   const name = (req.body?.name || '').trim()
   if (!name) return res.status(400).json({ error: 'Category name required' })
   const { rows: [existing] } = await pool.query('SELECT 1 FROM categories WHERE dept_id = $1 AND name = $2', [req.params.id, name])
@@ -63,7 +68,7 @@ r.post('/:id/categories', requireAdmin, async (req, res) => {
 })
 
 // DELETE /api/departments/:id/categories/:name — admin
-r.delete('/:id/categories/:name', requireAdmin, async (req, res) => {
+r.delete('/:id/categories/:name', requireDepartments, async (req, res) => {
   await pool.query('DELETE FROM categories WHERE dept_id = $1 AND name = $2', [req.params.id, req.params.name])
   await pool.query('DELETE FROM routing WHERE dept_id = $1 AND category = $2', [req.params.id, req.params.name])
   res.json({ ok: true })

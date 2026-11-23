@@ -5,7 +5,7 @@ import pool from '../db.js'
 import { requireAuth, requireStaff } from '../auth.js'
 import { PRIORITIES, todayInTz } from '../sla.js'
 import { sendMail, taskNotificationEmail } from '../email.js'
-import { isStaffRole, isAdminRole } from '../../shared/roles.js'
+import { isStaffRole } from '../../shared/roles.js'
 import { isDone } from '../../shared/ticketStatus.js'
 import { taskState, taskStateOf } from '../../shared/taskState.js'
 import { createsCycle, normalizeRecurrence, nextDueDate, canViewProject } from '../../shared/projects.js'
@@ -44,7 +44,7 @@ const unfinishedBlockers = async (taskId, db = pool) =>
 // Only projects the caller may see are listed (archived ones are hidden; a task living only there is hidden too).
 // Finished items are limited to the last 60 days so the list stays useful.
 r.get('/mine', async (req, res) => {
-  const admin = isAdminRole(req.user.role)
+  const admin = req.user.role === 'owner'   // only the Owner sees every project; Admins see their own and staff-visible ones
   const visible = `NOT p.archived AND ($2::boolean OR p.privacy = 'staff' OR pm.user_id IS NOT NULL)`
   const projectsOf = (col) => `(SELECT COALESCE(json_agg(json_build_object('id',p.id,'name',p.name,'color',p.color,'item_id',i.id) ORDER BY lower(p.name)), '[]'::json)
       FROM project_items i JOIN projects p ON p.id = i.project_id LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1

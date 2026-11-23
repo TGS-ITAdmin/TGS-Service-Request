@@ -11,21 +11,26 @@ test('only staff create projects', () => {
   assert.deepEqual(['owner', 'admin', 'manager', 'requestor'].map(r => canCreateProject(U(r))), [true, true, true, false])
 })
 
-test('visibility: requestors never; admins/owners always; managers when staff-visible or a member', () => {
+test('visibility: requestors never; the Owner always; Admins and Managers when staff-visible or a member', () => {
   const priv = { privacy: 'members' }, open = { privacy: 'staff' }
   assert.equal(canViewProject(U('requestor'), open, 'owner'), false)
-  assert.equal(canViewProject(U('admin'), priv, null), true)
   assert.equal(canViewProject(U('owner'), priv, null), true)
+  assert.equal(canViewProject(U('admin'), priv, null), false, 'an Admin does not see private projects they are not in')
+  assert.equal(canViewProject(U('admin'), priv, 'member'), true)
+  assert.equal(canViewProject(U('admin'), open, null), true)
   assert.equal(canViewProject(U('manager'), priv, null), false)
   assert.equal(canViewProject(U('manager'), priv, 'member'), true)
   assert.equal(canViewProject(U('manager'), open, null), true)
 })
 
-test('managing: project owner or admin-level only', () => {
+test('managing: the Owner; a project owner; an Admin in any project they belong to', () => {
   assert.equal(canManageProject(U('manager'), 'member'), false)
   assert.equal(canManageProject(U('manager'), null), false)
   assert.equal(canManageProject(U('manager'), 'owner'), true)
-  assert.equal(canManageProject(U('admin'), null), true)
+  assert.equal(canManageProject(U('owner'), null), true)
+  assert.equal(canManageProject(U('admin'), null), false, 'an Admin outside the project has no manage rights')
+  assert.equal(canManageProject(U('admin'), 'member'), true, 'added Admin has full access')
+  assert.equal(canManageProject(U('admin'), 'owner'), true)
   assert.equal(canManageProject(U('requestor'), 'owner'), false)
 })
 

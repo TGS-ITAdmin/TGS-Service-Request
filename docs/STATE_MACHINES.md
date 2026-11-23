@@ -195,12 +195,16 @@ stateDiagram-v2
 
 Source: `shared/roles.js` · Owner > Admin > Manager > Requestor. Also guarded in `server/routes/users.js`: nobody changes or deletes their own account, and the last Owner cannot be removed.
 
-| Role | Works tickets (staff) | Manages people & settings | May manage | May assign |
+| Role | Works tickets (staff) | Admin-level | May manage | May assign |
 |---|---|---|---|---|
 | `owner` | yes | yes | `owner`, `admin`, `manager`, `requestor` | `owner`, `admin`, `manager`, `requestor` |
 | `admin` | yes | yes | `manager`, `requestor` | `manager`, `requestor` |
 | `manager` | yes | no | `requestor` | `requestor` |
 | `requestor` | no | no | — | — |
+
+### Admin access
+
+Admins work tickets like Managers. Adding or changing accounts belongs to the **Owner, and Admins in IT Support** (IT Support is department `dept-it`). IT and the Owner also switch these on per Admin (they hold them by default): **Departments & routing** (`departments`), **Customer ratings** (`ratings`). Admins have full access only to projects they created or were added to; the Owner sees every project.
 
 ### Browser session
 

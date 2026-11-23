@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken'
 import pool from './db.js'
+import { ROLES, ROLE_RANK, STAFF_ROLES, ADMIN_ROLES, canManageAccounts, hasPerm } from '../shared/roles.js'
 
 export const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'helpdesk-dev-secret')
 
@@ -20,7 +21,7 @@ export async function requireAuth(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET)
     const { rows: [row] } = await pool.query(
-      'SELECT id,name,email,role,dept,color,verified,must_change_password,password_changed_at FROM users WHERE id = $1', [payload.id]
+      'SELECT id,name,email,role,dept,color,verified,must_change_password,perms,password_changed_at FROM users WHERE id = $1', [payload.id]
     )
     if (!row) return res.status(401).json({ error: 'User not found' })
     const { password_changed_at, ...user } = row
@@ -36,18 +37,22 @@ export async function requireAuth(req, res, next) {
   }
 }
 
-// Roles, highest first. "Staff" works tickets; "admin level" (owner + admin) also manages people and settings.
-export const ROLES = ['owner', 'admin', 'manager', 'requestor']
-export const ROLE_RANK = { owner: 4, admin: 3, manager: 2, requestor: 1 }
-export const STAFF_ROLES = ['owner', 'admin', 'manager']
-export const ADMIN_ROLES = ['owner', 'admin']
+// Roles live in shared/roles.js (also used by the browser). Re-exported so older imports keep working.
+export { ROLES, ROLE_RANK, STAFF_ROLES, ADMIN_ROLES }
 
 export function requireStaff(req, res, next) {
   if (!STAFF_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Staff only' })
   next()
 }
 
-export function requireAdmin(req, res, next) {
-  if (!ADMIN_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Admin only' })
+// Add / change / remove accounts and hand out Admin access: the Owner and Admins in IT Support.
+export function requireManageAccounts(req, res, next) {
+  if (!canManageAccounts(req.user)) return res.status(403).json({ error: 'Only the Owner or IT can manage accounts' })
+  next()
+}
+
+// An Admin switch ('departments' | 'ratings'). The Owner and IT always have it.
+export const requirePerm = (perm) => (req, res, next) => {
+  if (!hasPerm(req.user, perm)) return res.status(403).json({ error: 'You do not have access to this. Ask IT or the Owner.' })
   next()
 }

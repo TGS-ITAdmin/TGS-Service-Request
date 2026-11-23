@@ -29,9 +29,12 @@ function machineSection(m, title, source) {
 function rolesSection() {
   const p = rolePolicy()
   const out = ['### Role assignment policy', '', 'Source: `shared/roles.js` · Owner > Admin > Manager > Requestor. Also guarded in `server/routes/users.js`: nobody changes or deletes their own account, and the last Owner cannot be removed.', '',
-    '| Role | Works tickets (staff) | Manages people & settings | May manage | May assign |', '|---|---|---|---|---|']
+    '| Role | Works tickets (staff) | Admin-level | May manage | May assign |', '|---|---|---|---|---|']
   for (const r of p.roles) out.push(`| \`${r}\` | ${p.staff.includes(r) ? 'yes' : 'no'} | ${p.adminLevel.includes(r) ? 'yes' : 'no'} | ${list(p.byActor[r].manages)} | ${list(p.byActor[r].assigns)} |`)
-  out.push('')
+  out.push('', '### Admin access', '',
+    `Admins work tickets like Managers. Adding or changing accounts belongs to the **${p.access.accountManagers}** (IT Support is department \`${p.access.itDept}\`). `
+    + 'IT and the Owner also switch these on per Admin (they hold them by default): ' + p.access.perms.map(x => `**${x.label}** (\`${x.id}\`)`).join(', ') + '. '
+    + 'Admins have full access only to projects they created or were added to; the Owner sees every project.', '')
   return out.join('\n')
 }
 

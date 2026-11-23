@@ -4,9 +4,10 @@ import { randomUUID } from 'crypto'
 import pool from '../db.js'
 import { signToken, requireAuth } from '../auth.js'
 import { sendMail, verificationEmail } from '../email.js'
+import { account, accountState, accountColumns, canLogin } from '../../shared/account.js'
 
 const r = Router()
-const publicUser = u => ({ id: u.id, name: u.name, email: u.email, role: u.role, dept: u.dept, color: u.color, must_change_password: !!u.must_change_password })
+const publicUser = u => ({ id: u.id, name: u.name, email: u.email, role: u.role, dept: u.dept, color: u.color, perms: u.perms || [], must_change_password: !!u.must_change_password, account_state: accountState(u) })
 const COLORS = ['#3b82f6','#06b6d4','#10b981','#f59e0b','#8b5cf6','#ef4444','#ec4899','#64748b']
 
 // POST /api/auth/register — open self-signup, always creates a requestor
@@ -16,8 +17,8 @@ r.post('/register', async (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address' })
 
-  const { rows: [existing] } = await pool.query('SELECT id, verified FROM users WHERE email = $1', [email.toLowerCase()])
-  if (existing?.verified) return res.status(409).json({ error: 'An account with this email already exists' })
+  const { rows: [existing] } = await pool.query('SELECT id, verified, must_change_password FROM users WHERE email = $1', [email.toLowerCase()])
+  if (!account.can(existing ? accountState(existing) : null, 'register')) return res.status(409).json({ error: 'An account with this email already exists' })
 
   const code = String(Math.floor(100000 + Math.random() * 900000))
   const hash = bcrypt.hashSync(password, 10)
@@ -40,17 +41,19 @@ r.post('/verify', async (req, res) => {
   const { email, code } = req.body || {}
   const { rows: [user] } = await pool.query('SELECT * FROM users WHERE email = $1', [(email || '').toLowerCase()])
   if (!user) return res.status(404).json({ error: 'No account found for this email' })
-  if (user.verified) return res.status(400).json({ error: 'Account already verified — just log in' })
+  const from = accountState(user)
+  if (!account.can(from, 'verify')) return res.status(400).json({ error: 'Account already verified — just log in' })
   if (!code || user.verify_code !== String(code).trim()) return res.status(400).json({ error: 'Incorrect verification code' })
-  await pool.query('UPDATE users SET verified = true, verify_code = NULL WHERE id = $1', [user.id])
+  const cols = accountColumns(account.next(from, 'verify'))
+  await pool.query('UPDATE users SET verified = $1, must_change_password = $2, verify_code = NULL WHERE id = $3', [cols.verified, cols.must_change_password, user.id])
   const token = signToken(user)
-  res.json({ ok: true, token, user: publicUser(user) })
+  res.json({ ok: true, token, user: publicUser({ ...user, ...cols }) })
 })
 
 // POST /api/auth/resend — { email }
 r.post('/resend', async (req, res) => {
   const { rows: [user] } = await pool.query('SELECT * FROM users WHERE email = $1', [(req.body?.email || '').toLowerCase()])
-  if (!user || user.verified) return res.status(400).json({ error: 'Cannot resend for this account' })
+  if (!user || !account.can(accountState(user), 'resend_code')) return res.status(400).json({ error: 'Cannot resend for this account' })
   const code = String(Math.floor(100000 + Math.random() * 900000))
   await pool.query('UPDATE users SET verify_code = $1 WHERE id = $2', [code, user.id])
   const { ok, previewUrl } = await sendMail({ to: user.email, subject: 'Your new HelpDesk verification code', html: verificationEmail(user.name, code) })
@@ -63,7 +66,7 @@ r.post('/login', async (req, res) => {
   const { email, password } = req.body || {}
   const { rows: [user] } = await pool.query('SELECT * FROM users WHERE email = $1', [(email || '').toLowerCase()])
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) return res.status(401).json({ error: 'Invalid email or password' })
-  if (!user.verified) return res.status(403).json({ error: 'unverified', message: 'Please verify your email first' })
+  if (!canLogin(accountState(user))) return res.status(403).json({ error: 'unverified', code: 'unverified', message: 'Please verify your email first' })
   const token = signToken(user)
   res.json({ token, user: publicUser(user) })
 })
@@ -75,14 +78,17 @@ r.post('/change-password', requireAuth, async (req, res) => {
   const { rows: [u] } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id])
   if (!bcrypt.compareSync(currentPassword || '', u.password_hash)) return res.status(400).json({ error: 'Current password is incorrect' })
   if (currentPassword === newPassword) return res.status(400).json({ error: 'New password must be different from the current one' })
+  const nextState = account.next(accountState(u), 'change_password')
+  if (!nextState) return res.status(403).json({ error: 'Verify your email before changing your password' })
+  const cols = accountColumns(nextState)
   const { rows: [upd] } = await pool.query(
-    'UPDATE users SET password_hash = $1, must_change_password = false, password_changed_at = now() WHERE id = $2 RETURNING password_changed_at',
-    [bcrypt.hashSync(newPassword, 10), u.id]
+    'UPDATE users SET password_hash = $1, must_change_password = $2, password_changed_at = now() WHERE id = $3 RETURNING password_changed_at',
+    [bcrypt.hashSync(newPassword, 10), cols.must_change_password, u.id]
   )
-  res.json({ ok: true, token: signToken({ ...u, password_changed_at: upd.password_changed_at }), user: publicUser({ ...u, must_change_password: false }) })
+  res.json({ ok: true, token: signToken({ ...u, password_changed_at: upd.password_changed_at }), user: publicUser({ ...u, ...cols }) })
 })
 
 // GET /api/auth/me
-r.get('/me', requireAuth, (req, res) => res.json({ user: req.user }))
+r.get('/me', requireAuth, (req, res) => res.json({ user: { ...req.user, account_state: accountState(req.user) } }))
 
 export default r

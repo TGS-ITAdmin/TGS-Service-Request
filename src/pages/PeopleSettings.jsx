@@ -1,13 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api } from '../api.js'
+import { notifyError } from '../lib/errors.js'
 import { Avatar } from '../components/Badge.jsx'
 import { Modal } from '../components/Modal.jsx'
-import { useAuth, isAdmin, ROLE_RANK } from '../AuthContext.jsx'
+import { useAuth, ROLES, canManageRole, assignableRoles, IT_DEPT, PERMS, PERM_LABEL, isIT, canManageAccounts, hasPerm, canSetPerms } from '../AuthContext.jsx'
 
-const ROLES = ['owner', 'admin', 'manager', 'requestor']
 const ROLE_INFO = {
-  owner:     { label: 'Owner',     desc: 'Top level. Everything an Admin can do, and the only role that can create, change or remove Admin and Owner accounts.', cls: 'bg-amber-100 text-amber-800' },
-  admin:     { label: 'Admin',     desc: 'Works every ticket and manages Managers, Requestors, departments and routing. Cannot change Admins or Owners.',      cls: 'bg-purple-100 text-purple-700' },
+  owner:     { label: 'Owner',     desc: 'Top level. Everything an Admin can do, every project, and the only role that can create, change or remove Admin and Owner accounts.', cls: 'bg-amber-100 text-amber-800' },
+  admin:     { label: 'Admin',     desc: 'Works every ticket. Admins in IT Support also manage accounts. Departments & routing and customer ratings are switched on per Admin by IT or the Owner. Full access only to projects they created or were added to.', cls: 'bg-purple-100 text-purple-700' },
   manager:   { label: 'Manager',   desc: 'Works every ticket: edit any field, assign, complete, subtasks and internal notes. Can view the team but not change it.', cls: 'bg-blue-100 text-blue-700' },
   requestor: { label: 'Requestor', desc: 'Can only create and follow their own tickets.',                                                                     cls: 'bg-gray-100 text-gray-600' },
 }
@@ -29,10 +29,11 @@ function CopyButton({ text }) {
 
 export default function PeopleSettings() {
   const { user } = useAuth()
-  const admin = isAdmin(user)
+  const admin = canManageAccounts(user)             // Owner or an Admin in IT Support: add / change / remove accounts
+  const canDepts = hasPerm(user, 'departments')     // add / delete departments (Owner, IT, or an Admin granted it)
   // Owners manage everyone; Admins manage only people ranked below Admin (the server enforces this too)
-  const canManageUser = (u) => user.role === 'owner' || ROLE_RANK[u.role] < ROLE_RANK[user.role]
-  const assignable = user.role === 'owner' ? ROLES : ROLES.filter(r => ROLE_RANK[r] < ROLE_RANK[user.role])
+  const canManageUser = (u) => canManageRole(user.role, u.role)
+  const assignable = assignableRoles(user.role)
   const [tab, setTab] = useState('people')
   const [users, setUsers] = useState([])
   const [departments, setDepartments] = useState([])
@@ -103,18 +104,22 @@ export default function PeopleSettings() {
 
   const updateRole = async (u, role) => {
     const verb = role === 'owner' ? `Make ${u.name} an OWNER? They will have top-level control, including over every Admin and Owner account (yours too).`
-      : role === 'admin' ? `Make ${u.name} an ADMIN? They will be able to manage Managers, Requestors, departments and routing.`
+      : role === 'admin' ? `Make ${u.name} an ADMIN? They will work every ticket. Account management, departments and ratings stay off until IT or an Owner grants them.`
       : `Change ${u.name}'s role from ${ROLE_INFO[u.role].label} to ${ROLE_INFO[role].label}?`
     if (!confirm(verb)) { load(); return }
-    try { await api.users.update(u.id, { role }); load() } catch (e) { alert(e.message); load() }
+    try { await api.users.update(u.id, { role }); load() } catch (e) { notifyError(e); load() }
+  }
+  const togglePerm = async (u, perm) => {
+    const next = (u.perms || []).includes(perm) ? u.perms.filter(p => p !== perm) : [...(u.perms || []), perm]
+    try { await api.users.update(u.id, { perms: next }); load() } catch (e) { notifyError(e); load() }
   }
   const updateDept = async (id, dept) => {
-    try { await api.users.update(id, { dept: dept || null }); load() } catch (e) { alert(e.message) }
+    try { await api.users.update(id, { dept: dept || null }); load() } catch (e) { notifyError(e) }
   }
 
   const deleteUser = async (u) => {
     if (!confirm(`Remove ${u.name}? Their tickets are kept, but they will lose access immediately.`)) return
-    try { await api.users.delete(u.id); load() } catch (e) { alert(e.message) }
+    try { await api.users.delete(u.id); load() } catch (e) { notifyError(e) }
   }
 
   const deleteDept = async (id) => {
@@ -254,6 +259,18 @@ export default function PeopleSettings() {
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_INFO[u.role]?.cls}`}
                             title={isSelf ? 'You cannot change your own role' : admin && !manageable ? 'Only an Owner can change this account' : ''}>{ROLE_INFO[u.role]?.label || u.role}</span>
                         )}
+                        {u.role === 'admin' && (
+                          isIT(u) ? <div className="mt-1 text-[11px] text-gray-400">Full access (IT Support)</div>
+                          : canSetPerms(user, u) ? (
+                            <div className="mt-1.5 space-y-0.5" aria-label={`Access for ${u.name}`}>
+                              {PERMS.map(p => (
+                                <label key={p} className="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer">
+                                  <input type="checkbox" checked={(u.perms || []).includes(p)} onChange={() => togglePerm(u, p)} /> {PERM_LABEL[p]}
+                                </label>
+                              ))}
+                            </div>
+                          ) : <div className="mt-1 text-[11px] text-gray-400">{(u.perms || []).length ? (u.perms || []).map(p => PERM_LABEL[p]).join(', ') : 'Tickets and own projects only'}</div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-sm">
                         {manageable ? (
@@ -286,7 +303,7 @@ export default function PeopleSettings() {
         <div>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-lg font-semibold text-gray-700">Departments ({departments.length})</h2>
-            {admin && <button className="btn-primary" onClick={() => { setError(''); setShowNewDept(true) }}>＋ Add Department</button>}
+            {canDepts && <button className="btn-primary" onClick={() => { setError(''); setShowNewDept(true) }}>＋ Add Department</button>}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {departments.map(d => (
@@ -303,7 +320,7 @@ export default function PeopleSettings() {
                     )}
                   </div>
                 </div>
-                {admin && <button className="text-gray-300 hover:text-red-500 transition-colors" onClick={() => deleteDept(d.id)}>✕</button>}
+                {canDepts && d.id !== IT_DEPT && <button className="text-gray-300 hover:text-red-500 transition-colors" title="Delete department" onClick={() => deleteDept(d.id)}>✕</button>}
               </div>
             ))}
           </div>

@@ -4,7 +4,7 @@ import pool from '../db.js'
 import { requireAuth, requireStaff } from '../auth.js'
 import { PRIORITIES } from '../sla.js'
 import { sendMail, taskNotificationEmail } from '../email.js'
-import { isStaffRole, isAdminRole } from '../../shared/roles.js'
+import { isStaffRole } from '../../shared/roles.js'
 import { isDone } from '../../shared/ticketStatus.js'
 import {
   PRIVACY, MEMBER_ROLES, DEFAULT_SECTIONS, FIELD_TYPES, MAX_SELECT_OPTIONS, canCreateProject, cleanFieldValue,
@@ -32,7 +32,7 @@ async function staffIds(ids) {
 
 // GET /api/projects — projects the caller may see, with progress counts
 r.get('/', async (req, res) => {
-  const admin = isAdminRole(req.user.role)
+  const admin = req.user.role === 'owner'   // only the Owner sees every project; Admins see their own and staff-visible ones
   const { rows } = await pool.query(
     `SELECT p.*, pm.role AS my_role,
        EXISTS (SELECT 1 FROM project_favorites f WHERE f.project_id = p.id AND f.user_id = $1) AS is_favorite,
