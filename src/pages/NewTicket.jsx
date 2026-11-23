@@ -11,7 +11,7 @@ export default function NewTicket({ onClose, onCreated }) {
   const [first0, ...rest0] = (staff ? '' : user.name || '').split(' ')
   const [form, setForm] = useState({
     title: '', description: '', priority: '',
-    client: '', site: '', category: '', due_date: '',
+    client: '', site: '', category: '',
     firstName: first0 || '', lastName: rest0.join(' '),
     reqEmail: staff ? '' : user.email,
   })
@@ -36,7 +36,6 @@ export default function NewTicket({ onClose, onCreated }) {
       const ticket = await api.tickets.create({
         ...rest,
         reqName: `${firstName.trim()} ${lastName.trim()}`,
-        due_date: form.due_date || null,
       })
       for (const f of files) {
         try { await api.tickets.uploadAttachment(ticket.id, f) }
@@ -116,13 +115,6 @@ export default function NewTicket({ onClose, onCreated }) {
           <p className="text-xs text-gray-500 mb-1">{DETAILS_NOTE}</p>
           <textarea className="input resize-none h-28" value={form.description} onChange={e => set('description', e.target.value)} placeholder="Enter your answer" />
         </div>
-
-        {staff && (
-          <div>
-            <label className="label">Due date <span className="font-normal text-gray-400">(optional, staff only; overrides the automatic date)</span></label>
-            <input type="date" className="input w-48" value={form.due_date} onChange={e => set('due_date', e.target.value)} />
-          </div>
-        )}
 
         <div>
           <label className="label">Screenshots or Files to support request</label>

@@ -120,7 +120,7 @@ r.get('/:id', async (req, res) => {
 
 // POST /api/tickets — any authenticated user creates; requestor fields auto-filled
 r.post('/', async (req, res) => {
-  const { title, description, priority, category, due_date, reqName, reqEmail, client, site } = req.body || {}
+  const { title, description, priority, category, reqName, reqEmail, client, site } = req.body || {}
   const formError = validateServiceRequest(req.body)
   if (formError) return res.status(400).json({ error: formError })
   const dept = concernDept(category)   // the Concern decides the department
@@ -135,8 +135,7 @@ r.post('/', async (req, res) => {
     dept, category, client, site, assignee,
     requestor_id: requestorSelf ? req.user.id : null,
     req_name: rName, req_email: rEmail,
-    // due date follows the priority; staff may enter their own, requestors cannot
-    due_date: requestorSelf ? dueDateFor(priority || 'medium') : (due_date || dueDateFor(priority || 'medium')),
+    due_date: dueDateFor(priority),   // always automatic, from the urgency
     created_at: now(), updated_at: now(), resolved_at: null,
   }
   await pool.query(
